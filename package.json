@@ -1,0 +1,25 @@
+{
+  "name": "company-accounts",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/web",
+    "apps/api"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run build -w @accounts/api && npm run build -w @accounts/web",
+    "test": "npm run test -w @accounts/api",
+    "typecheck": "npm run typecheck -w @accounts/api && npm run typecheck -w @accounts/web",
+    "db:migrate": "npm run migrate -w @accounts/api",
+    "preview": "node scripts/dev.mjs --built",
+    "demo": "node scripts/dev.mjs --demo",
+    "demo:built": "node scripts/dev.mjs --demo --built"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "overrides": {
+    "multer": "2.5.0"
+  }
+}
