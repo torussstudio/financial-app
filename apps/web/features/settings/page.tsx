@@ -46,7 +46,7 @@ export function SettingsPage({ ctx }: Props) {
           <ShieldCheck size={22}/>
           <h2>Development build</h2>
           <p>
-            {data.company.demo ? "This database contains sample accounts. Printed documents are watermarked." : "Live invoice issuance stays gated until company tax rules and required integrations are validated."}
+            {data.company.demo ? "This database contains sample accounts. Printed documents are watermarked." : "GST invoices issue once the company GSTIN, matching state code and address are set here, and each B2B line has an HSN / SAC code."}
           </p>
           <small>INR · Asia/Kolkata · Accrual accounting</small>
         </section>

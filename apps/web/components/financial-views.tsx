@@ -1,5 +1,14 @@
 import { Badge, Empty } from "./ui";
 import { amountInWords, day, money, pretty, type Row } from "../lib/format";
+// Report tabs built from the API's categoryLines; the keys match the categories assigned in reports.ts.
+export const CATEGORY_REPORTS: Record<string, { key: string; title: string; inLabel: string; outLabel: string; creditSide: boolean; note: string }> = {
+  Income: { key: "INCOME", title: "Income", inLabel: "Earned", outLabel: "Reduced", creditSide: true, note: "Income accounts, excluding output GST. Credit notes and reversals show as reductions." },
+  Expenses: { key: "EXPENSE", title: "Expenses", inLabel: "Spent", outLabel: "Reduced", creditSide: false, note: "Expense accounts, including reimbursements." },
+  Investments: { key: "INVESTMENT", title: "Investments", inLabel: "Invested", outLabel: "Withdrawn", creditSide: false, note: "Investment accounts such as FD and RD." },
+  Capital: { key: "CAPITAL", title: "Capital", inLabel: "Capital in", outLabel: "Capital returned", creditSide: true, note: "Owner capital brought in and returned." },
+  Loans: { key: "LOAN", title: "Loans", inLabel: "Loan received", outLabel: "Repaid", creditSide: true, note: "Loan principal received and repaid." },
+  Assets: { key: "ASSET", title: "Assets", inLabel: "Purchased", outLabel: "Reduced", creditSide: false, note: "Fixed assets and deposits. Cash, bank, receivables and investments are not included here." }
+};
 export function Report({ data, type, to, from }: {
   data: Row;
   type: string;
@@ -119,6 +128,68 @@ export function Report({ data, type, to, from }: {
           </tbody>
         </table>
       </div>{!rows.length && <Empty label="No outstanding balances"/>}</>;
+  }
+  const category = CATEGORY_REPORTS[type];
+  if (category) {
+    const lines = (data.categoryLines as Row[]).filter(l => l.category === category.key);
+    const cents = (v: any) => Math.round(Number(v || 0) * 100);
+    const totalIn = lines.reduce((s, l) => s + cents(l.in), 0) / 100, totalOut = lines.reduce((s, l) => s + cents(l.out), 0) / 100;
+    const byAccount = [...new Set(lines.map(l => l.code))].map(code => {
+      const own = lines.filter(l => l.code === code);
+      return {
+        code,
+        name: own[0].name,
+        in: own.reduce((s, l) => s + cents(l.in), 0) / 100,
+        out: own.reduce((s, l) => s + cents(l.out), 0) / 100,
+        balance: Number(balances.find(a => a.code === code)?.balance || 0) * (category.creditSide ? -1 : 1)
+      };
+    });
+    const showBalance = category.key !== "INCOME" && category.key !== "EXPENSE";
+    return <div className="report-body">
+      <div className="report-title">
+        <h2>{category.title}</h2>
+        <p>{day(from)} — {day(to)} · Selected date range and client / vendor filter</p>
+      </div>
+      {byAccount.map(a => <div className="statement-row" key={a.code}>
+        <span>{a.name}{showBalance && <small className="muted"> · balance {money(a.balance)} as of {day(to)}</small>}</span>
+        <strong>{money(a.in - a.out)}</strong>
+      </div>)}
+      <div className="statement-row total">
+        <span>Net {category.title.toLowerCase()} for the period</span>
+        <strong>{money(totalIn - totalOut)}</strong>
+      </div>
+      <h3>Transactions</h3>
+      {lines.length ? <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Particulars</th>
+              <th>Ref</th>
+              <th>Account</th>
+              <th className="right">{category.inLabel}</th>
+              <th className="right">{category.outLabel}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l, i) => <tr key={l.entry_id + ":" + l.code + ":" + i}>
+              <td className="muted nowrap">{day(l.entry_date)}</td>
+              <td><strong>{l.party_name || l.description}</strong>{l.party_name && <small>{l.description}</small>}</td>
+              <td className="nowrap">{l.number}<small>{pretty(l.kind)}</small></td>
+              <td>{l.name}</td>
+              <td className="right amount">{Number(l.in) > 0 ? money(l.in) : "—"}</td>
+              <td className="right amount">{Number(l.out) > 0 ? money(l.out) : "—"}</td>
+            </tr>)}
+            <tr className="total-row">
+              <td colSpan={4}>Total</td>
+              <td className="right amount">{money(totalIn)}</td>
+              <td className="right amount">{money(totalOut)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div> : <Empty label={"No " + category.title.toLowerCase() + " in this period"}/>}
+      <p className="fine">{category.note} Balances are company-wide as of the end date; the period totals follow the date range and client / vendor filter.</p>
+    </div>;
   }
   if (type === "GST summary") {
     // Credit notes reduce output tax, so they are listed with negative amounts.

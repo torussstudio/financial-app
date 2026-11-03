@@ -58,7 +58,7 @@ The API applies the SQL baseline automatically at startup. `npm run db:migrate` 
 - Bank & cash: paste statement CSV with `date,reference,description,amount` columns. Receipts are positive, payments negative. Import deduplicates; matching links an existing exact-value entry and never creates another posting.
 - Settings: change company details, create accountant/viewer accounts, and close/reopen periods with an audit reason.
 
-The GST/non-GST UI preserves `TAXABLE`, `NIL_RATED`, `EXEMPT`, and `OUTSIDE_GST` as distinct treatments. Selecting a treatment is not a determination of its legal applicability. Non-taxable documents require a reason. Live invoice issuance and unallocated live advances remain intentionally gated until the company's tax workflow is implemented and validated. See STATUS for tax functionality still missing.
+The GST/non-GST UI preserves `TAXABLE`, `NIL_RATED`, `EXEMPT`, and `OUTSIDE_GST` as distinct treatments. Selecting a treatment is not a determination of its legal applicability. Non-taxable documents require a reason. Live invoices issue once the tax-invoice particulars are present (see STATUS); unallocated live advances remain intentionally gated. See STATUS for tax functionality still missing.
 
 ## Source layout
 

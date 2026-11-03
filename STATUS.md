@@ -25,7 +25,7 @@ Single-company scope is retained. This milestone supplies working core screens a
 
 ## Current boundaries
 
-- Live invoice issuance is blocked when the company is not a demo. Do not bypass this guard as a shortcut to production. Complete and test the actual tax/document requirements first.
+- Live (non-demo) invoices are checked on issue instead of blocked: company name and address and client name are required; GST invoices also need a valid company GSTIN whose first two digits match the company state code, the client address, a valid client GSTIN when one is given, an HSN/SAC on every line of a B2B invoice, and a number of at most 16 characters (letters, digits, `-`, `/`). Credit notes follow the same rule as their invoice. E-invoicing (IRN/QR) and e-way bills are not implemented; businesses that must e-invoice need that before relying on issued invoices. Unallocated live client advances remain gated.
 - Preview invoices are watermarked and use fictional data. The output-tax report is a working summary, not a filed return or net tax-payable report.
 - The `BILL` document type is the non-GST **Payment Receipt**: issuing it posts the amount received to Petty cash (Cash) or Operating bank (Bank Transfer/Cheque) against the chosen income account. Vendor bills, GST purchase/ITC posting and vendor payments against bills are not implemented; record vendor payments as expense vouchers. Payment receipts issued by earlier builds were posted as Rent expense / Accounts payable and need an accountant-reviewed correcting journal.
 - Invoices and payment receipts get their series number when issued (drafts show a `DRAFT-` reference), so abandoned drafts leave no gaps. Automatic numbering skips numbers already used manually.

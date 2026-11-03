@@ -1,5 +1,5 @@
 import { EntryTable } from "../../components/entry-table";
-import { Report } from "../../components/financial-views";
+import { CATEGORY_REPORTS, Report } from "../../components/financial-views";
 import type { Row } from "../../lib/format";
 type Props = {
   ctx: any
@@ -10,7 +10,7 @@ export function ReportsPage({ ctx }: Props) {
   return <> {page === "reports" && <section className="panel">
       <div className="panel-toolbar">
         <div className="tabs">
-          {["P&L", "Trial balance", "Balance sheet", "Ageing", "GST summary", "Audit"].map(t => <button key={t} className={report === t ? "selected" : ""} onClick={() => setReport(t)}>
+          {["P&L", ...Object.keys(CATEGORY_REPORTS), "Trial balance", "Balance sheet", "Ageing", "GST summary", "Audit"].map(t => <button key={t} className={report === t ? "selected" : ""} onClick={() => setReport(t)}>
             {t}
           </button>)}
         </div>

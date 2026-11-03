@@ -308,6 +308,27 @@ function outputTaxLines(
   }
   return [{ account: "2100", [side]: cgst.toFixed(2) }, { account: "2110", [side]: sgst.toFixed(2) }];
 }
+const GSTIN = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+// Particulars a live invoice must carry before it is issued (for GST invoices, the tax-invoice details from Settings and the draft).
+function checkLiveInvoice(
+  d: Record<string, any>,
+  company: Record<string, any>
+) {
+  const client = d.client_snapshot || {}, missing: string[] = [];
+  if (!String(company.name || "").trim()) missing.push("company name");
+  if (!String(company.address || "").trim()) missing.push("company address");
+  if (!String(client.name || "").trim()) missing.push("client name");
+  if (d.tax_treatment === "TAXABLE") {
+    const gstin = String(company.gstin || "").trim().toUpperCase(), clientGstin = String(client.gstin || "").trim().toUpperCase();
+    need(GSTIN.test(gstin), "Add the company's 15-character GSTIN in Settings before issuing a GST invoice.");
+    need(gstin.slice(0, 2) === String(company.state_code || ""), "The company state code in Settings must match the first two digits of its GSTIN.");
+    need(!clientGstin || GSTIN.test(clientGstin), "The client GSTIN on this invoice is not a valid 15-character GSTIN.");
+    if (!String(client.address || "").trim()) missing.push("client address");
+    // B2B invoices (client has a GSTIN) need an HSN/SAC code on every line.
+    if (clientGstin && (d.lines as any[]).some(l => !String(l.hsn || "").trim())) missing.push("HSN / SAC on every line");
+  }
+  need(!missing.length, "Add the " + missing.join(", ") + " before issuing this invoice.");
+}
 // Shared by create and edit so a draft can never be edited past the rules enforced at creation.
 async function prepareDocument(
   q: Queryable,
@@ -481,12 +502,9 @@ export async function issueDocument(
   const companyDefaults = await one(q, "SELECT * FROM company WHERE id='company'"),
     company = { ...companyDefaults, ...(d.company_snapshot || {}) },
     party = await one(q, "SELECT * FROM parties WHERE id=$1", [d.party_id]);
-    // Production fiscal issue needs company-specific tax verification; preview never creates a legal tax document.
+  // A live invoice is a legal document, so it must carry the particulars a tax invoice requires; demo books stay permissive.
   if (d.kind === "INVOICE" && !company.demo)
-    throw new AppError(
-    409,
-    "Live invoice issuance is gated until company tax configuration and required integrations are validated. Drafting and preview are available."
-  );
+    checkLiveInvoice(d, company);
   if (POSTING_DOCUMENTS.includes(d.kind))
     need(
       d.currency === "INR",
@@ -499,6 +517,9 @@ export async function issueDocument(
   const num = d.number.startsWith(DRAFT_PREFIX)
     ? await nextFreeNumber(q, DOCUMENT_PREFIX[d.kind], d.issue_date, "documents")
     : d.number;
+  // GST invoice serial numbers: at most 16 characters of letters, digits, "-" and "/".
+  if (d.kind === "INVOICE" && d.tax_treatment === "TAXABLE" && !company.demo)
+    need(/^[A-Za-z0-9/-]{1,16}$/.test(num), "A GST invoice number can have at most 16 characters: letters, digits, \"-\" and \"/\". Change the number on the draft.");
   if (POSTING_DOCUMENTS.includes(d.kind)) {
     let lines: any[];
     if (d.kind === "BILL")
@@ -714,12 +735,6 @@ export async function issueCreditNote(
   need(inv?.kind === "INVOICE" && inv.status === "ISSUED", "Credit notes can only be issued against an issued invoice.", 409);
   need(b.date >= inv.issue_date, "A credit note cannot be dated before its invoice.");
   need(b.reason?.trim().length >= 3, "Explain why the invoice is being credited.");
-  const company = await one(q, "SELECT demo FROM company WHERE id='company'");
-  if (!company.demo)
-    throw new AppError(
-    409,
-    "Live credit notes are gated together with live invoice issuance until the company's GST workflow is validated."
-  );
   // Quantities already credited per original line, so repeated credit notes can never exceed the invoice.
   const credited = new Map<number, D>();
   for (const cn of (await q.query("SELECT lines FROM documents WHERE kind='CREDIT_NOTE' AND status='ISSUED' AND source_id=$1", [invoiceId])).rows)

@@ -110,20 +110,48 @@ test("credit notes cannot exceed the outstanding balance and keep inter-state ta
   assert.deepEqual((await lines(entry.id)).map(l => l.account_code), ["1100", "2120", "4000"]);
   assert.equal(await settled(inv), "2590.00");
 });
-test("credit notes require an issued invoice, a valid date and demo-mode gating", async () => {
+test("credit notes require an issued invoice and a valid date, and work on live books", async () => {
   const draft = await db.tx(q => createDocument(q, actor, invoiceInput()));
   await assert.rejects(() => db.tx(q => issueCreditNote(q, actor, draft.id, { date: "2026-12-10", reason: "Draft", lines: [{ line: 0, quantity: "1" }] })), /issued invoice/);
   const inv = await issueInvoice();
   await assert.rejects(() => db.tx(q => issueCreditNote(q, actor, inv, { date: "2026-12-01", reason: "Early", lines: [{ line: 0, quantity: "1" }] })), /before its invoice/);
   await db.query("UPDATE company SET demo=false");
   try {
-    await assert.rejects(() => db.tx(q => issueCreditNote(q, actor, inv, { date: "2026-12-10", reason: "Live", lines: [{ line: 0, quantity: "1" }] })), /gated/);
+    const live = await db.tx(q => issueCreditNote(q, actor, inv, { date: "2026-12-10", reason: "Live", lines: [{ line: 0, quantity: "1" }] }));
+    assert.equal((await one(db, "SELECT kind,status FROM documents WHERE id=$1", [live.id]))?.status, "ISSUED");
   }
   finally {
     await db.query("UPDATE company SET demo=true");
   }
   const entry = await one(db, "SELECT id FROM journal_entries WHERE document_id=$1", [inv]);
   await assert.rejects(() => db.tx(q => reverseJournal(q, actor, entry.id, "2026-12-10", "Direct")), /credit note/);
+});
+test("live invoices issue once the tax-invoice particulars are present", async () => {
+  const company = await one(db, "SELECT name,address,gstin,state_code FROM company WHERE id='company'");
+  await db.query("UPDATE company SET demo=false,address='',gstin=NULL,state_code='32'");
+  try {
+    const b2b = { client: { name: "Correction client", address: "Palakkad", gstin: "32ABCDE1234F1Z5" } };
+    const noGstin = await db.tx(q => createDocument(q, actor, invoiceInput(b2b)));
+    await assert.rejects(() => db.tx(q => issueDocument(q, actor, noGstin.id)), /GSTIN in Settings/);
+    await db.query("UPDATE company SET gstin='33ECQPK6925L1Z1'");
+    await assert.rejects(() => db.tx(q => issueDocument(q, actor, noGstin.id)), /state code/);
+    await db.query("UPDATE company SET gstin='32ECQPK6925L1Z1'");
+    await assert.rejects(() => db.tx(q => issueDocument(q, actor, noGstin.id)), /company address, HSN \/ SAC/);
+    await db.query("UPDATE company SET address='Palakkad, Kerala'");
+    const longNumber = await db.tx(q => createDocument(q, actor, invoiceInput({
+      ...b2b, number: "INVOICE-2026-000001", lines: [{ description: "Design", quantity: "1", price: "1000", taxRate: "18", hsn: "998391" }]
+    })));
+    await assert.rejects(() => db.tx(q => issueDocument(q, actor, longNumber.id)), /16 characters/);
+    const ok = await db.tx(q => createDocument(q, actor, invoiceInput({
+      ...b2b, lines: [{ description: "Design", quantity: "1", price: "1000", taxRate: "18", hsn: "998391" }]
+    })));
+    const issued = await db.tx(q => issueDocument(q, actor, ok.id));
+    assert.match(issued.number, /^INV\/2627\/\d{5}$/);
+    assert.equal((await one(db, "SELECT status FROM documents WHERE id=$1", [ok.id])).status, "ISSUED");
+  }
+  finally {
+    await db.query("UPDATE company SET demo=true,name=$1,address=$2,gstin=$3,state_code=$4", [company.name, company.address, company.gstin, company.state_code]);
+  }
 });
 test("cancelling drafts, quotations and payment receipts", async () => {
   const draft = await db.tx(q => createDocument(q, actor, invoiceInput()));

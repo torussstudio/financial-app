@@ -55,6 +55,8 @@ test("a payment receipt posts cash/bank against income and is not a payable", as
   assert.equal(r.metrics.income, "750.00");
   assert.equal(r.metrics.expenses, "0.00");
   assert.equal(r.metrics.payables, "0.00");
+  // The Income report sees the receipt's income line, and the cash side is left out of every category.
+  assert.deepEqual(r.categoryLines.map(l => [l.category, l.code, l.in, l.out]), [["INCOME", "4000", "750.00", "0.00"]]);
   const bank = await db.tx(q => createDocument(q, actor, { ...receipt, paymentMethod: "Cheque", incomeAccount: "4100" }));
   await db.tx(q => issueDocument(q, actor, bank.id));
   assert.deepEqual((await entryLines("e.document_id=$1", [bank.id])).map(l => l.account_code), ["1000", "4100"]);

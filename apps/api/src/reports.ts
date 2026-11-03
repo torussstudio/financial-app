@@ -41,7 +41,7 @@ export async function getReport(
     audit
   ] = await Promise.all([
     db.query(
-      "SELECT e.id,e.entry_date::text,e.kind,e.party_id,e.project_id,a.code,a.name,a.kind AS account_kind,a.is_cash,l.debit::text,l.credit::text FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id JOIN accounts a ON a.code=l.account_code WHERE " + cond + " ORDER BY e.entry_date",
+      "SELECT e.id,e.number,e.description,e.entry_date::text,e.kind,e.party_id,e.project_id,p.name AS party_name,a.code,a.name,a.kind AS account_kind,a.is_cash,a.voucher_category_kind,l.debit::text,l.credit::text FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id JOIN accounts a ON a.code=l.account_code LEFT JOIN parties p ON p.id=e.party_id WHERE " + cond + " ORDER BY e.entry_date,e.created_at",
       args
     ),
     db.query(
@@ -107,7 +107,28 @@ export async function getReport(
     if (l.account_kind === "EXPENSE")
       cost = cost.add(new D(l.debit).sub(l.credit));
   } return { ...p, revenue: revenue.toFixed(2), cost: cost.toFixed(2), profit: revenue.sub(cost).toFixed(2) }; });
+  // Category reports: every posted line in the filtered range on income, expense, investment, asset, capital or loan accounts.
+  // "in" is the side that grows the category (income earned, money invested, capital brought in…), "out" the side that shrinks it.
+  const categoryOf = (l: Row) =>
+    l.account_kind === "INCOME" ? "INCOME"
+    : l.account_kind === "EXPENSE" ? "EXPENSE"
+    : l.code.startsWith("14") || l.voucher_category_kind === "INVESTMENT" ? "INVESTMENT"
+    : /^1[56]/.test(l.code) || l.voucher_category_kind === "ASSET" ? "ASSET"
+    : l.account_kind === "EQUITY" ? "CAPITAL"
+    : l.code === "2200" ? "LOAN"
+    : null;
+  const categoryLines = lines.rows.flatMap(l => {
+    const category = categoryOf(l);
+    if (!category) return [];
+    const creditSide = ["INCOME", "CAPITAL", "LOAN"].includes(category);
+    return [{
+      category, entry_id: l.id, number: l.number, description: l.description, entry_date: l.entry_date, kind: l.kind,
+      party_name: l.party_name, code: l.code, name: l.name,
+      in: creditSide ? l.credit : l.debit, out: creditSide ? l.debit : l.credit
+    }];
+  });
   return {
+    categoryLines,
     company: company.rows[0],
     metrics: {
       income: income.toFixed(2),
