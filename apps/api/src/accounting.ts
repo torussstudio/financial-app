@@ -340,13 +340,14 @@ async function prepareDocument(
   const interstate = stateKnown ? b.placeOfSupply !== company.state_code : b.interstate === true;
   const sums = calculateDocument(b), advance = new D(b.advanceAmount || 0);
   need(advance.gte(0) && advance.lte(sums.total), "Advance paid cannot exceed the document total.");
-  need(advance.eq(0) || b.kind === "INVOICE", "Only invoices can record an advance.");
+  need(advance.eq(0) || b.kind !== "BILL", "Payment receipts cannot record an advance.");
   const status = advance.eq(0) ? "NOT_RECEIVED" : advance.eq(sums.total) ? "FULLY_RECEIVED" : "PARTIALLY_RECEIVED";
   need(
     !b.advanceStatus || b.advanceStatus === status,
     "Advance payment status does not match the amount received."
   );
-  const advanceAccount = advance.gt(0) && b.advanceAccount ? b.advanceAccount : null;
+  // Only an invoice posts its advance on issue; on a quotation or proforma it is shown on the document and nothing more.
+  const advanceAccount = b.kind === "INVOICE" && advance.gt(0) && b.advanceAccount ? b.advanceAccount : null;
   if (advanceAccount)
     need(
       (await one(q, "SELECT is_cash FROM accounts WHERE code=$1", [advanceAccount]))?.is_cash,

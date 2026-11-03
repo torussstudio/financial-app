@@ -90,7 +90,9 @@ const docSchema = z.object({
     branch_name: z.string().max(150).optional(),
     bank_details: z.string().max(1000).optional(),
     gst_logo: z.string().max(1_500_000).regex(/^(?:|data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2})$/).optional(),
-    non_gst_logo: z.string().max(1_500_000).regex(/^(?:|data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2})$/).optional()
+    non_gst_logo: z.string().max(1_500_000).regex(/^(?:|data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2})$/).optional(),
+    // Which company profile (GST or non-GST) a payment receipt was made under; receipts themselves stay non-GST.
+    profile: z.enum(["TAXABLE", "OUTSIDE_GST"]).optional()
   }).optional(),
   lines: z.array(z.object({
     description: z.string().min(1).max(500),

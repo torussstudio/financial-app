@@ -70,9 +70,15 @@ test("editing a draft applies the same rules as creating it", async () => {
     /income account/
   );
   await assert.rejects(
-    () => db.tx(q => createDocument(q, actor, { ...base, kind: "QUOTATION", taxTreatment: "TAXABLE", advanceAmount: "10" })),
-    /Only invoices/
+    () => db.tx(q => createDocument(q, actor, { ...base, kind: "BILL", taxTreatment: "OUTSIDE_GST", taxReason: "Payment receipt", paymentMethod: "Cash", advanceAmount: "10" })),
+    /cannot record an advance/
   );
+  // A quotation's advance is display-only: it is kept on the document but never tied to a cash account.
+  const quote = await db.tx(q => createDocument(q, actor, { ...base, kind: "QUOTATION", taxTreatment: "TAXABLE", advanceAmount: "10", advanceAccount: "1000" }));
+  const savedQuote = await one(db, "SELECT advance_amount,advance_status,advance_account FROM documents WHERE id=$1", [quote.id]);
+  assert.equal(savedQuote.advance_amount, "10.00");
+  assert.equal(savedQuote.advance_status, "PARTIALLY_RECEIVED");
+  assert.equal(savedQuote.advance_account, null);
 });
 test("a manual number ahead of the sequence never blocks automatic numbering", async () => {
   const invoice = { ...base, kind: "INVOICE", taxTreatment: "TAXABLE" };

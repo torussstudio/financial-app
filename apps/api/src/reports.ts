@@ -49,7 +49,8 @@ export async function getReport(
       [f.to]
     ),
     db.query(
-      "SELECT e.*,e.entry_date::text,p.name AS party_name,COALESCE(SUM(l.debit),0)::text AS amount,(SELECT r.id FROM journal_entries r WHERE r.reversal_of=e.id) AS reversed_by FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id LEFT JOIN parties p ON p.id=e.party_id WHERE " + cond + " GROUP BY e.id,p.name ORDER BY e.entry_date DESC,e.created_at DESC LIMIT 250",
+      // cash_in / cash_account: money this entry brought into bank or cash, and where it landed (the Received ledger).
+      "SELECT e.*,e.entry_date::text,p.name AS party_name,COALESCE(SUM(l.debit),0)::text AS amount,(SELECT r.id FROM journal_entries r WHERE r.reversal_of=e.id) AS reversed_by,(SELECT COALESCE(SUM(x.debit-x.credit),0) FROM journal_lines x JOIN accounts a ON a.code=x.account_code WHERE x.entry_id=e.id AND a.is_cash)::text AS cash_in,(SELECT a.name FROM journal_lines x JOIN accounts a ON a.code=x.account_code WHERE x.entry_id=e.id AND a.is_cash AND x.debit>0 ORDER BY x.debit DESC LIMIT 1) AS cash_account FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id LEFT JOIN parties p ON p.id=e.party_id WHERE " + cond + " GROUP BY e.id,p.name ORDER BY e.entry_date DESC,e.created_at DESC LIMIT 250",
       args
     ),
     db.query(

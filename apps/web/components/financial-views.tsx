@@ -331,11 +331,14 @@ export function DocumentPreview({ d }: {
           <span>SGST</span>
           <strong>{docMoney(Number(d.tax) - Math.round(Number(d.tax) * 50) / 100)}</strong>
         </div></>)}
+      {/* Quotations and proformas never take payments, so their advance is just the amount saved on the document. */}
+      {Number(d.advance_amount || 0) > 0 && <><div><span>Advance Paid</span><strong>{docMoney(d.advance_amount)}</strong></div>
+        <div><span>Balance Payable</span><strong>{docMoney(Math.max(0, total - Number(d.advance_amount)))}</strong></div></>}
       <div className="grand-total"><span>Total</span><strong>{docMoney(total)}</strong></div>
     </div>{d.tax_reason && <p className="doc-note">Tax treatment basis: {d.tax_reason}</p>}{d.notes && <p className="doc-note">{d.notes}</p>}</>;
   return <article className={"document-page" + (isPaymentReceipt ? " payment-receipt-preview" : "")}>
         {company.demo && <div className="document-watermark">DEMONSTRATION · NOT A LEGAL TAX DOCUMENT</div>}
-        {isPaymentReceipt && <header className="payment-receipt-company"><h2>{company.name}</h2>{companyAddress.map((line: string, i: number) => <p key={i}>{line}</p>)}<p>Contact: {company.contact_number || company.contact || company.phone || ""} / {company.email || ""}</p></header>}
+        {isPaymentReceipt && <header className="payment-receipt-company"><h2>{company.name}</h2>{companyAddress.map((line: string, i: number) => <p key={i}>{line}</p>)}{company.profile === "TAXABLE" && company.gstin && <p>GSTIN: {company.gstin}</p>}<p>Contact: {company.contact_number || company.contact || company.phone || ""} / {company.email || ""}</p></header>}
         {!isPaymentReceipt && <div className="document-head">
       <div>
         {documentLogo ? <img className="doc-logo" src={documentLogo} alt={gst ? "GST company logo" : "Non-GST company logo"}/> : <div className="doc-emblem">L.</div>}

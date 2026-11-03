@@ -202,7 +202,7 @@ export function WorkspaceEntryModal({ context }: {
               </div><Field label="Document type">
                 <select value={newDocKind}
     disabled={Boolean(modal.document)}
-    onChange={e => { setNewDocKind(e.target.value); if (e.target.value !== "INVOICE") {
+    onChange={e => { setNewDocKind(e.target.value); if (e.target.value === "BILL") {
       setAdvanceAmount("0");
       setAdvanceStatus("NOT_RECEIVED")
     } if (e.target.value === "BILL") {
@@ -256,7 +256,7 @@ export function WorkspaceEntryModal({ context }: {
     [data.company.city, data.company.state_name || data.company.state, data.company.pin_code].filter(Boolean).join(", ")
   ].filter(Boolean).map((line: string, i: number) => <span key={i}>{line}</span>)}
                   {(newDocKind === "BILL" || taxTreatment === "TAXABLE") && data.company.state_code && <span>State code: {data.company.state_code}</span>}
-                  {newDocKind !== "BILL" && taxTreatment === "TAXABLE" && data.company.gstin && <span>GSTIN: {data.company.gstin}</span>}
+                  {taxTreatment === "TAXABLE" && data.company.gstin && <span>GSTIN: {data.company.gstin}</span>}
                   {(data.company.contact_number || data.company.contact || data.company.phone) && <span>Contact: {data.company.contact_number || data.company.contact || data.company.phone}</span>}
                 </div>}
               </div><Field label={newDocKind === "BILL" ? "Received from" : "Client / vendor"}>
@@ -293,23 +293,28 @@ export function WorkspaceEntryModal({ context }: {
     required/>
               </Field> : <input type="hidden"
     name="dueDate"
-    value={modal.document?.due_date?.slice(0, 10) || localDate(15)}/>}{newDocKind !== "BILL" && <Field label={newDocKind === "INVOICE" ? (taxTreatment === "TAXABLE" ? "GST Invoice treatment" : "Non-GST Invoice treatment") : "Tax treatment"}>
+    value={modal.document?.due_date?.slice(0, 10) || localDate(15)}/>}<Field label={newDocKind === "BILL" ? "Company details" : newDocKind === "INVOICE" ? (taxTreatment === "TAXABLE" ? "GST Invoice treatment" : "Non-GST Invoice treatment") : "Tax treatment"}>
+                {/* On a payment receipt this only picks the GST or non-GST company profile; the receipt itself never carries GST. */}
                 <select value={taxTreatment} onChange={e => { setTaxTreatment(e.target.value); setDocumentCompany(companyDocumentProfile(data.company, e.target.value)); }}>
-                  {(newDocKind === "BILL" ? ["OUTSIDE_GST"] : ["TAXABLE", "OUTSIDE_GST"]).map(k => <option key={k} value={k}>{pretty(k)}</option>)}
+                  {["TAXABLE", "OUTSIDE_GST"].map(k => <option key={k} value={k}>{pretty(k)}</option>)}
                 </select>
-              </Field>}{newDocKind !== "BILL" && taxTreatment === "TAXABLE" && <><Field label="Place of supply (state code)">
+              </Field>{newDocKind !== "BILL" && taxTreatment === "TAXABLE" && <><Field label="Place of supply (state code)">
                   <input name="placeOfSupply"
     value={placeOfSupply}
     onChange={e => setPlaceOfSupply(e.target.value)}
     pattern="[0-9]{2}"
     required/>
-                </Field>{!supplyStateKnown && <Field label="GST tax calculation">
-                  <select value={manualSupplyMode} required onChange={e => setManualSupplyMode(e.target.value)}>
+                </Field><Field label={supplyStateKnown ? "GST tax calculation (from place of supply)" : "GST tax calculation"}>
+                  {/* With both state codes known the split is fixed by law (same state → CGST + SGST), so it is shown but not editable. */}
+                  <select value={supplyStateKnown ? (draftInterstate ? "INTER" : "INTRA") : manualSupplyMode}
+    required
+    disabled={supplyStateKnown}
+    onChange={e => setManualSupplyMode(e.target.value)}>
                     <option value="">Select tax calculation</option>
                     <option value="INTRA">CGST + SGST</option>
                     <option value="INTER">IGST</option>
                   </select>
-                </Field>}</>}{newDocKind !== "BILL" && taxTreatment !== "TAXABLE" && <input type="hidden" name="placeOfSupply" value={placeOfSupply || data.company.state_code || "00"}/>}{newDocKind === "BILL" && <><input type="hidden" name="placeOfSupply" value={documentCompany.state_code || data.company.state_code}/><input type="hidden" name="taxReason" value="Payment receipt"/></>}{newDocKind !== "BILL" && taxTreatment !== "TAXABLE" && <Field label="Reason / basis for tax treatment" wide>
+                </Field></>}{newDocKind !== "BILL" && taxTreatment !== "TAXABLE" && <input type="hidden" name="placeOfSupply" value={placeOfSupply || data.company.state_code || "00"}/>}{newDocKind === "BILL" && <><input type="hidden" name="placeOfSupply" value={documentCompany.state_code || data.company.state_code}/><input type="hidden" name="taxReason" value="Payment receipt"/></>}{newDocKind !== "BILL" && taxTreatment !== "TAXABLE" && <Field label="Reason / basis for tax treatment" wide>
                 <input name="taxReason"
     required
     defaultValue={modal.document?.tax_reason || ""}
@@ -341,8 +346,8 @@ export function WorkspaceEntryModal({ context }: {
                   </div>
                 </div>
                 <div className="line-labels"
-    style={{ gridTemplateColumns: newDocKind === "BILL" ? "30px minmax(180px,3fr) 1fr 25px" : newDocKind === "INVOICE" ? taxTreatment === "TAXABLE" ? "30px minmax(130px,3fr) .6fr .9fr .9fr .6fr 25px" : "30px minmax(130px,3fr) .6fr .9fr .9fr 25px" : undefined }}>
-                  {(newDocKind === "BILL" || newDocKind === "INVOICE") && <span>SL</span>}
+    style={{ gridTemplateColumns: newDocKind === "BILL" ? "30px minmax(180px,3fr) 1fr 25px" : taxTreatment === "TAXABLE" ? "30px minmax(130px,3fr) .6fr .9fr .9fr .6fr 25px" : "30px minmax(130px,3fr) .6fr .9fr .9fr 25px" }}>
+                  <span>SL</span>
                   <span>{newDocKind === "BILL" ? "Description" : "Description / HSN-SAC"}</span>
                   {newDocKind === "BILL" ? <span>Amount Received (INR)</span> : <><span>Qty</span><span>Rate ({docCurrency})</span><span>Amount ({docCurrency})</span>{(taxTreatment === "TAXABLE") && <span>GST %</span>}</>}
                   <span />
@@ -352,8 +357,8 @@ export function WorkspaceEntryModal({ context }: {
     i
   ) => <div className="line-editor"
     key={i}
-    style={{ gridTemplateColumns: newDocKind === "BILL" ? "30px minmax(180px,3fr) 1fr 25px" : newDocKind === "INVOICE" ? taxTreatment === "TAXABLE" ? "30px minmax(130px,3fr) .6fr .9fr .9fr .6fr 25px" : "30px minmax(130px,3fr) .6fr .9fr .9fr 25px" : undefined }}>
-                  {(newDocKind === "BILL" || newDocKind === "INVOICE") && <span className="line-serial">{i + 1}</span>}
+    style={{ gridTemplateColumns: newDocKind === "BILL" ? "30px minmax(180px,3fr) 1fr 25px" : taxTreatment === "TAXABLE" ? "30px minmax(130px,3fr) .6fr .9fr .9fr .6fr 25px" : "30px minmax(130px,3fr) .6fr .9fr .9fr 25px" }}>
+                  <span className="line-serial">{i + 1}</span>
                   <div>
                     <input aria-label={"Line " + (i + 1) + " description"}
     placeholder={newDocKind === "BILL" ? "Payment description" : "Service or item"}
@@ -404,11 +409,11 @@ export function WorkspaceEntryModal({ context }: {
               </div>{newDocKind === "BILL" && <div className="wide form-note receipt-live-total">
                 <strong>Amount Received: {money(draftPaymentTotal)}</strong>
                 <span>Amount in Words: {amountInWords(draftPaymentTotal)}</span>
-              </div>}{newDocKind === "INVOICE" && <div className="wide">
+              </div>}{newDocKind !== "BILL" && <div className="wide">
                 <div className="document-section-title">
                   <span>04</span>
                   <div>
-                    <strong>Invoice summary</strong>
+                    <strong>{newDocKind === "INVOICE" ? "Invoice summary" : "Document summary"}</strong>
                     <small>Tax breakdown follows the selected GST treatment</small>
                   </div>
                 </div>
@@ -438,8 +443,7 @@ export function WorkspaceEntryModal({ context }: {
     else if (e.target.value === "FULLY_RECEIVED")
       setAdvanceAmount(String(draftInvoiceTotals.total));
     else if (Number(advanceAmount) <= 0 || Number(advanceAmount) >= draftInvoiceTotals.total)
-      setAdvanceAmount(String(Math.round(draftInvoiceTotals.total / 2 * 100) / 100)) }}
-    disabled={newDocKind !== "INVOICE"}>
+      setAdvanceAmount(String(Math.round(draftInvoiceTotals.total / 2 * 100) / 100)) }}>
                     <option value="NOT_RECEIVED">Not Received</option>
                     <option value="PARTIALLY_RECEIVED">Partially Received</option>
                     <option value="FULLY_RECEIVED">Fully Received</option>
@@ -454,16 +458,15 @@ export function WorkspaceEntryModal({ context }: {
     onChange={e => {
     setAdvanceAmount(e.target.value);
     setAdvanceStatus(Number(e.target.value) <= 0 ? "NOT_RECEIVED" : Number(e.target.value) >= draftInvoiceTotals.total ? "FULLY_RECEIVED" : "PARTIALLY_RECEIVED")
-  }}
-    disabled={newDocKind !== "INVOICE"}/>
+  }}/>
                 </Field>
-                {advanceValue > 0 && <Field label="Advance received into">
+                {newDocKind === "INVOICE" && advanceValue > 0 && <Field label="Advance received into">
                   <select name="advanceAccount" required defaultValue={modal.document?.advance_account || "1000"}>
                     {accounts.filter((a: Row) => a.is_cash).map((a: Row) => <option key={a.code} value={a.code}>{a.name}</option>)}
                   </select>
                 </Field>}
-                {advanceValue > 0 && <div className="form-note">Issuing the invoice also records this advance as a receipt allocated to it.</div>}
-                {docCurrency !== "INR" && <div className="form-note">Foreign-currency invoices can be drafted and previewed, but cannot be issued until exchange-rate conversion is available.</div>}
+                {advanceValue > 0 && <div className="form-note">{newDocKind === "INVOICE" ? "Issuing the invoice also records this advance as a receipt allocated to it." : "Shown on the document only. Quotations and proformas never post to the ledger, and converting to an invoice does not carry this advance over."}</div>}
+                {newDocKind === "INVOICE" && docCurrency !== "INR" && <div className="form-note">Foreign-currency invoices can be drafted and previewed, but cannot be issued until exchange-rate conversion is available.</div>}
               </div>}{newDocKind !== "BILL" && <div className="wide">
                 <div className="document-section-title">
                   <span>05</span>

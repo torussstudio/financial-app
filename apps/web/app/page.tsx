@@ -303,7 +303,10 @@ export default function Page() {
     setFormKind(type === "capital" ? "CAPITAL_IN" : "EXPENSE");
     setPaymentDoc(extra.document?.id || "");
     setDocLines([{ description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }]);
-    const selectedTaxTreatment = extra.document?.tax_treatment || "TAXABLE";
+    // Payment receipts are always saved as non-GST; the company profile they were made under lives on their company snapshot.
+    const selectedTaxTreatment = extra.document?.kind === "BILL"
+      ? (extra.document.company_snapshot?.profile === "TAXABLE" ? "TAXABLE" : "OUTSIDE_GST")
+      : extra.document?.tax_treatment || "TAXABLE";
     setTaxTreatment(selectedTaxTreatment);
     setNewDocKind(extra.document?.kind || "INVOICE");
     setPlaceOfSupply(extra.document?.place_of_supply || "");
@@ -396,19 +399,20 @@ export default function Page() {
           description: [r?.number, money(f.amount), f.description].filter(Boolean).join(" · ")
         })); break;
         case "document": {
-          if (taxTreatment === "TAXABLE" && draftInterstate === null) throw Error("Select CGST + SGST or IGST because supplier state information is unavailable.");
+          const isReceipt = newDocKind === "BILL";
+          if (!isReceipt && taxTreatment === "TAXABLE" && draftInterstate === null) throw Error("Select CGST + SGST or IGST because supplier state information is unavailable.");
           const payload = {
             ...f,
             kind: newDocKind,
             number: docNumber || undefined,
-            taxTreatment,
+            taxTreatment: isReceipt ? "OUTSIDE_GST" : taxTreatment,
             ...(draftInterstate === null ? {} : { interstate: draftInterstate }),
             projectId: f.projectId || null,
             currency: docCurrency,
             advanceAmount,
             advanceStatus: Number(advanceAmount) <= 0 ? "NOT_RECEIVED" : Number(advanceAmount) >= draftInvoiceTotals.total ? "FULLY_RECEIVED" : "PARTIALLY_RECEIVED",
             client: clientInfo,
-            company: taxTreatment === "OUTSIDE_GST" ? documentCompany : undefined,
+            company: isReceipt ? { ...documentCompany, profile: taxTreatment } : taxTreatment === "OUTSIDE_GST" ? documentCompany : undefined,
             lines: docLines
           };
           const path = modal.document ? "documents/" + modal.document.id : "documents";
