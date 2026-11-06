@@ -5,6 +5,9 @@ import { ATTACHMENT_ACCEPT, foreignOutstandingOf, gstCharged, localDate, moneySu
 import { AllocationTable } from "./allocation-table";
 import { AttachmentsPanel } from "./attachments-panel";
 type Row = Record<string, any>;
+// Payments can only settle what is still open across all dates (the API checks the same), even when the page's end date is
+// earlier than a later receipt; report figures elsewhere stay "as of" the selected end date.
+const allTime = (d: Row): Row => d.paid_all == null ? d : { ...d, paid: d.paid_all, foreign_paid: d.foreign_paid_all ?? d.foreign_paid };
 export function WorkspaceEntryModal({ context }: {
   context: any
 }) {
@@ -93,7 +96,7 @@ export function WorkspaceEntryModal({ context }: {
     setTdsAmount("");
     setTdsSection("");
     setTdsRate("");
-    const d = modal?.document;
+    const d = modal?.document ? allTime(modal.document) : undefined;
     if (modal?.type === "payment" && d) {
       // A foreign-currency invoice is settled in its own currency; the INR credited to the bank is entered separately.
       const foreign = foreignOutstandingOf(d);
@@ -121,7 +124,7 @@ export function WorkspaceEntryModal({ context }: {
   };
   const paymentDirection = modal?.direction === "PAYMENT" ? "PAYMENT" : "RECEIPT";
   // Open documents a payment can settle: invoices and sales debit notes for a client, vendor bills for a vendor.
-  const openDocsFor = (partyId: string, kind: string) => (data?.documents || [])
+  const openDocsFor = (partyId: string, kind: string) => (data?.documents || []).map(allTime)
     .filter((d: Row) => (kind === "INVOICE" ? RECEIVABLE_KINDS.includes(d.kind) : d.kind === kind) && d.status === "ISSUED" && d.party_id === partyId && outstandingOf(d) > 0);
   const cents = (v: any) => Math.round(Number(v || 0) * 100);
   // Live figures for the payment dialog: what the allocations settle in INR, and the money that actually moves.

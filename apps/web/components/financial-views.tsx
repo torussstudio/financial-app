@@ -437,7 +437,7 @@ export function DocumentPreview({ d }: {
       <td className="right">{line.quantity}</td>
       <td className="right">{docMoney(line.price)}</td>
       <td className="right">{docMoney(line.base)}</td>
-      {gst && (d.interstate ? <td className="right">{docMoney(tax)}</td> : <><td className="right">{docMoney(otherHalf)}</td><td className="right">{docMoney(half)}</td></>)}
+      {gst && (d.interstate ? <td className="right">{docMoney(tax)}</td> : <><td className="right">{docMoney(half)}</td><td className="right">{docMoney(otherHalf)}</td></>)}
       <td className="right">{docMoney(Number(line.base || 0) + tax)}</td>
     </tr>;
   });
@@ -450,7 +450,7 @@ export function DocumentPreview({ d }: {
             <th className="right">Qty</th>
             <th className="right">Rate</th>
             <th className="right">Line amount</th>
-            {gst && (d.interstate ? <th className="right">IGST</th> : <><th className="right">SGST</th><th className="right">CGST</th></>)}
+            {gst && (d.interstate ? <th className="right">IGST</th> : <><th className="right">CGST</th><th className="right">SGST</th></>)}
             <th className="right">Total</th>
           </tr>
         </thead>

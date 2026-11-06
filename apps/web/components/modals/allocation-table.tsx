@@ -35,7 +35,7 @@ export function AllocationTable({ docs, values, onChange, amount, remainderLabel
       <button type="button" className="link small" onClick={() => onChange({})}>Clear</button>
     </div>
     <div className="table-scroll">
-      <table>
+      <table className="allocation-grid">
         <thead><tr><th>Document</th><th>Due</th><th className="right">Balance</th><th className="right">Allocate</th></tr></thead>
         <tbody>
           {docs.map(d => {

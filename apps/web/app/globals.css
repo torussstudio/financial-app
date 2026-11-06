@@ -77,3 +77,5 @@
 .doc-irn p span{overflow-wrap:anywhere}
 .doc-qr{width:132px;height:132px;image-rendering:pixelated;flex:none}
 @media print{.doc-qr{width:110px;height:110px}.doc-compliance{break-inside:avoid}}
+/* Phones: keep the Allocate column in view by dropping the Due column (the due date is in the document list). */
+@media (max-width:680px){.allocation-grid th:nth-child(2),.allocation-grid td:nth-child(2){display:none}.allocation-grid td,.allocation-grid th{padding-left:6px;padding-right:6px}}

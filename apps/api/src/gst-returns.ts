@@ -374,6 +374,10 @@ export function buildEinvoice(d: Row, companyRow: Row) {
   const supTyp = exportSupply ? (d.zero_rated_type === "WITH_IGST" ? "EXPWP" : "EXPWOP") : zero ? (d.zero_rated_type === "WITH_IGST" ? "SEZWP" : "SEZWOP") : "B2B";
   const sellerPin = Number(String(company.pin_code || "").trim()) || pinOf(company.address);
   const buyerPin = exportSupply ? 999999 : pinOf(buyer.address);
+  // Addr1 and Loc are mandatory (at least 3 characters) for both parties on the IRP.
+  if (String(company.address || "").trim().length < 3) issues.push("Add the company address in Settings (SellerDtls.Addr1).");
+  if (String(company.city || lastLine(company.address)).trim().length < 3) issues.push("Add the company city in Settings (SellerDtls.Loc).");
+  if (!exportSupply && String(buyer.address || "").trim().length < 3) issues.push("The recipient has no address (BuyerDtls.Addr1).");
   if (!sellerPin) issues.push("Add the company PIN code in Settings (SellerDtls.Pin).");
   if (!buyerPin) issues.push("The recipient address has no 6-digit PIN code (BuyerDtls.Pin).");
   if ((d.lines as Row[]).some(l => !String(l.hsn || "").trim())) issues.push("Every line needs an HSN/SAC code (ItemList.HsnCd).");

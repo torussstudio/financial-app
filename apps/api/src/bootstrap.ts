@@ -108,7 +108,13 @@ export async function bootstrap(
       const date = (
         offset: number,
         day: number
-      ) => new Date(Date.UTC(year, month + offset, day)).toISOString().slice(0, 10);
+      ) => {
+        // Never seed a future-dated entry: on days early in the month the current month's later entries move to today.
+        const d = new Date(Date.UTC(year, month + offset, day)).toISOString().slice(0, 10), today = now.toISOString().slice(0, 10);
+        return d > today ? today : d;
+      };
+      // Due and valid-until dates may lie in the future; only postings are capped.
+      const due = (offset: number, day: number) => new Date(Date.UTC(year, month + offset, day)).toISOString().slice(0, 10);
       await postVoucher(
         q,
         actor,
@@ -131,7 +137,7 @@ export async function bootstrap(
             partyId: partyIds[k],
             projectId: k === 0 ? project : undefined,
             date: date(i, 3 + k * 3),
-            dueDate: date(i, 18 + k * 3),
+            dueDate: due(i, 18 + k * 3),
             taxTreatment: "TAXABLE",
             taxReason: "",
             placeOfSupply: "32",
@@ -183,7 +189,7 @@ export async function bootstrap(
         kind: "QUOTATION",
         partyId: partyIds[3],
         date: date(0, 20),
-        dueDate: date(1, 4),
+        dueDate: due(1, 4),
         taxTreatment: "TAXABLE",
         placeOfSupply: "32",
         lines: [{
