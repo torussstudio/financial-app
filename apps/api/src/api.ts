@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Req, Res, Param, Query, Inject } from "@nestjs/common";
+import { Controller, Get, Post, Patch, Delete, Body, Req, Res, Param, Query, Inject } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import type { Database } from "./db.js";
@@ -18,6 +18,7 @@ import {
   reverseJournal,
   issueCreditNote,
   cancelDocument,
+  applyAdvance,
   businessToday,
   addDays,
   daysBetween
@@ -49,7 +50,10 @@ const voucher = z.object({
   projectId: optionalId
 });
 const docSchema = z.object({
-  kind: z.enum(["QUOTATION", "PROFORMA", "INVOICE", "BILL"]),
+  kind: z.enum(["QUOTATION", "PROFORMA", "INVOICE", "BILL", "PURCHASE"]),
+  // Vendor bills: the supplier's own bill number, and whether its GST can be claimed as input tax credit.
+  reference: z.string().max(80).optional(),
+  itcEligible: z.boolean().optional(),
   number: z.string().min(1).max(80).optional(),
   partyId: z.string(),
   projectId: optionalId,
@@ -206,6 +210,8 @@ export class ApiController {
       kind: z.enum(["CLIENT", "VENDOR", "BOTH"]),
       voucherCategoryKind: z.enum(["INCOME", "CAPITAL_IN", "CAPITAL_RETURN", "REIMBURSEMENT", "LOAN_IN", "LOAN_REPAY"]).optional()
     }).parse(raw);
+    b.gstin = b.gstin?.trim().toUpperCase() || null;
+    need(!b.gstin || GSTIN_FORMAT.test(b.gstin), "GSTIN must be a valid 15-character GSTIN, or left blank.");
     return this.db.tx(async q => {
       if (b.voucherCategoryKind) {
         // Tagging an existing contact for another category (e.g. an owner who both invests and claims reimbursements) avoids duplicates.
@@ -818,4 +824,299 @@ export class ApiController {
       return { ok: true };
     });
   }
+  // ---- Editing and archiving masters. Issued documents keep their own snapshots, so edits never rewrite history. ----
+  @Patch("parties/:id")
+  async editParty(
+    @Req()
+  req: any,
+    @Param("id")
+  pid: string,
+    @Body()
+  raw: unknown
+  ) {
+    writer(actor(req));
+    const b = z.object({
+      name: z.string().trim().min(2).max(150),
+      contactName: z.string().max(150).default(""),
+      email: z.union([z.email(), z.literal("")]).default(""),
+      phone: z.string().max(30).default(""),
+      address: z.string().max(500).default(""),
+      gstin: z.string().trim().toUpperCase().max(15).default(""),
+      kind: z.enum(["CLIENT", "VENDOR", "BOTH"]),
+      archived: z.boolean().default(false)
+    }).parse(raw);
+    need(!b.gstin || GSTIN_FORMAT.test(b.gstin), "GSTIN must be a valid 15-character GSTIN, or left blank.");
+    return this.db.tx(async q => {
+      const old = await one(q, "SELECT * FROM parties WHERE id=$1 FOR UPDATE", [pid]);
+      need(old, "Contact not found.", 404);
+      if (old.kind !== b.kind && b.kind !== "BOTH") {
+        // A contact with bills on the other side must stay usable for them.
+        const other = b.kind === "CLIENT" ? "PURCHASE" : "INVOICE";
+        need(
+          !(await one(q, "SELECT id FROM documents WHERE party_id=$1 AND kind=$2 AND status<>'CANCELLED' LIMIT 1", [pid, other])),
+          "This contact has " + (other === "PURCHASE" ? "vendor bills" : "invoices") + ". Use “Client & vendor” instead.",
+          409
+        );
+      }
+      await q.query(
+        "UPDATE parties SET name=$2,contact_name=$3,email=$4,phone=$5,address=$6,gstin=$7,kind=$8,archived=$9 WHERE id=$1",
+        [pid, b.name, b.contactName, b.email, b.phone, b.address, b.gstin || null, b.kind, b.archived]
+      );
+      const changed = ["name", "contact_name", "email", "phone", "address", "gstin", "kind", "archived"]
+        .filter(k => String(old[k] ?? "") !== String(({ ...b, contact_name: b.contactName, gstin: b.gstin || null } as any)[k] ?? ""));
+      await audit(q, actor(req), b.archived && !old.archived ? "party.archive" : !b.archived && old.archived ? "party.restore" : "party.update", pid, { changed });
+      return { id: pid };
+    });
+  }
+  @Patch("projects/:id")
+  async editProject(
+    @Req()
+  req: any,
+    @Param("id")
+  pid: string,
+    @Body()
+  raw: unknown
+  ) {
+    writer(actor(req));
+    const b = z.object({ name: z.string().trim().min(2).max(150), partyId: optionalId, budget: amount.default("0"), archived: z.boolean().default(false) }).parse(raw);
+    return this.db.tx(async q => {
+      const old = await one(q, "SELECT * FROM projects WHERE id=$1 FOR UPDATE", [pid]);
+      need(old, "Project not found.", 404);
+      await q.query("UPDATE projects SET name=$2,party_id=$3,budget=$4,archived=$5 WHERE id=$1", [pid, b.name, b.partyId || null, b.budget, b.archived]);
+      await audit(q, actor(req), b.archived && !old.archived ? "project.archive" : !b.archived && old.archived ? "project.restore" : "project.update", pid, { budget: b.budget });
+      return { id: pid };
+    });
+  }
+  // ---- Products & services master: defaults for document lines; documents copy the values, so later edits never change them. ----
+  @Post("items")
+  async createItem(
+    @Req()
+  req: any,
+    @Body()
+  raw: unknown
+  ) {
+    writer(actor(req));
+    const b = itemSchema.parse(raw);
+    return this.db.tx(async q => {
+      need(!(await one(q, "SELECT id FROM items WHERE lower(name)=lower($1)", [b.name])), "An item with this name already exists.", 409);
+      const iid = id();
+      await q.query(
+        "INSERT INTO items(id,name,description,hsn,unit,rate,tax_rate,kind) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+        [iid, b.name, b.description, b.hsn, b.unit, b.rate, b.taxRate, b.kind]
+      );
+      await audit(q, actor(req), "item.create", iid, { name: b.name });
+      return { id: iid };
+    });
+  }
+  @Patch("items/:id")
+  async editItem(
+    @Req()
+  req: any,
+    @Param("id")
+  iid: string,
+    @Body()
+  raw: unknown
+  ) {
+    writer(actor(req));
+    const b = itemSchema.extend({ archived: z.boolean().default(false) }).parse(raw);
+    return this.db.tx(async q => {
+      const old = await one(q, "SELECT * FROM items WHERE id=$1 FOR UPDATE", [iid]);
+      need(old, "Item not found.", 404);
+      need(!(await one(q, "SELECT id FROM items WHERE lower(name)=lower($1) AND id<>$2", [b.name, iid])), "An item with this name already exists.", 409);
+      await q.query(
+        "UPDATE items SET name=$2,description=$3,hsn=$4,unit=$5,rate=$6,tax_rate=$7,kind=$8,archived=$9 WHERE id=$1",
+        [iid, b.name, b.description, b.hsn, b.unit, b.rate, b.taxRate, b.kind, b.archived]
+      );
+      await audit(q, actor(req), "item.update", iid, { name: b.name, archived: b.archived });
+      return { id: iid };
+    });
+  }
+  // ---- User management and passwords ----
+  @Patch("users/:id")
+  async editUser(
+    @Req()
+  req: any,
+    @Param("id")
+  uid: string,
+    @Body()
+  raw: unknown
+  ) {
+    admin(actor(req));
+    const b = z.object({ name: z.string().trim().min(2).max(100), role: z.enum(["ADMIN", "ACCOUNTANT", "VIEWER"]), active: z.boolean() }).parse(raw);
+    return this.db.tx(async q => {
+      await q.query("SELECT pg_advisory_xact_lock(hashtext('user-admins'))");
+      const old = await one(q, "SELECT * FROM users WHERE id=$1 FOR UPDATE", [uid]);
+      need(old, "User not found.", 404);
+      if (uid === actor(req).id)
+        need(b.role === old.role && b.active, "You cannot change your own role or disable your own account.", 409);
+      if (old.role === "ADMIN" && old.active && (b.role !== "ADMIN" || !b.active)) {
+        const admins = await one(q, "SELECT COUNT(*)::int AS n FROM users WHERE role='ADMIN' AND active=true AND id<>$1", [uid]);
+        need(admins.n > 0, "At least one active administrator is required.", 409);
+      }
+      await q.query("UPDATE users SET name=$2,role=$3,active=$4 WHERE id=$1", [uid, b.name, b.role, b.active]);
+      // A disabled user is signed out everywhere at once.
+      if (!b.active)
+        await q.query("DELETE FROM sessions WHERE user_id=$1", [uid]);
+      await audit(q, actor(req), !b.active && old.active ? "user.disable" : b.active && !old.active ? "user.enable" : "user.update", uid, { role: b.role, previousRole: old.role });
+      return { id: uid };
+    });
+  }
+  @Post("users/:id/password")
+  async resetPassword(
+    @Req()
+  req: any,
+    @Param("id")
+  uid: string,
+    @Body()
+  raw: unknown
+  ) {
+    admin(actor(req));
+    const b = z.object({ password: z.string().min(12).max(256) }).parse(raw);
+    need(uid !== actor(req).id, "Use “Change my password” for your own account.", 409);
+    return this.db.tx(async q => {
+      const u = await one(q, "SELECT id FROM users WHERE id=$1 FOR UPDATE", [uid]);
+      need(u, "User not found.", 404);
+      await q.query("UPDATE users SET password_hash=$2 WHERE id=$1", [uid, hashPassword(b.password)]);
+      await q.query("DELETE FROM sessions WHERE user_id=$1", [uid]);
+      await audit(q, actor(req), "user.password.reset", uid);
+      return { ok: true };
+    });
+  }
+  @Post("auth/password")
+  async changePassword(
+    @Req()
+  req: any,
+    @Body()
+  raw: unknown
+  ) {
+    const b = z.object({ currentPassword: z.string().min(1).max(256), newPassword: z.string().min(12).max(256) }).parse(raw);
+    need(b.currentPassword !== b.newPassword, "Choose a new password that differs from the current one.");
+    return this.db.tx(async q => {
+      const u = await one(q, "SELECT * FROM users WHERE id=$1 FOR UPDATE", [actor(req).id]);
+      need(u && verifyPassword(b.currentPassword, u.password_hash), "Your current password is incorrect.", 400);
+      await q.query("UPDATE users SET password_hash=$2 WHERE id=$1", [u.id, hashPassword(b.newPassword)]);
+      // Keep this session; sign out every other device.
+      await q.query("DELETE FROM sessions WHERE user_id=$1 AND id<>$2", [u.id, digest(tokenFrom(req) || "")]);
+      await audit(q, actor(req), "user.password.change", u.id);
+      return { ok: true };
+    });
+  }
+  // ---- Applying advances already received from clients / paid to vendors ----
+  @Post("advances/apply")
+  async advance(
+    @Req()
+  req: any,
+    @Body()
+  raw: unknown
+  ) {
+    writer(actor(req));
+    const b = z.object({
+      direction: z.enum(["RECEIPT", "PAYMENT"]),
+      partyId: z.string(),
+      date,
+      description: z.string().max(300).optional(),
+      allocations: z.array(z.object({ documentId: z.string(), amount })).min(1).max(100)
+    }).parse(raw);
+    return idempotent(
+      this.db,
+      actor(req),
+      req.headers["idempotency-key"],
+      { op: "advance", b },
+      q => applyAdvance(q, actor(req), b)
+    );
+  }
+  // ---- Attachments: bills, receipts and other evidence for documents and ledger entries ----
+  @Get("attachments")
+  async attachments(
+    @Query()
+  raw: any) {
+    const b = z.object({ entityType: z.enum(["DOCUMENT", "ENTRY"]), entityId: z.string().min(1) }).parse(raw);
+    return (await this.db.query(
+      "SELECT a.id,a.file_name,a.content_type,a.size,a.created_at,u.name AS uploaded_by FROM attachments a LEFT JOIN users u ON u.id=a.uploaded_by WHERE a.entity_type=$1 AND a.entity_id=$2 ORDER BY a.created_at",
+      [b.entityType, b.entityId]
+    )).rows;
+  }
+  @Post("attachments")
+  async upload(
+    @Req()
+  req: any,
+    @Body()
+  raw: unknown
+  ) {
+    writer(actor(req));
+    const b = z.object({
+      entityType: z.enum(["DOCUMENT", "ENTRY"]),
+      entityId: z.string().min(1),
+      fileName: z.string().min(1).max(200),
+      contentType: z.enum(Object.keys(ATTACHMENT_TYPES) as [string, ...string[]]),
+      data: z.string().min(1).max(Math.ceil(MAX_ATTACHMENT / 3) * 4 + 4).regex(/^[A-Za-z0-9+/]+={0,2}$/, "Attachment data must be base64.")
+    }).parse(raw);
+    const bytes = Buffer.from(b.data, "base64");
+    need(bytes.length > 0 && bytes.length <= MAX_ATTACHMENT, "Attachments can be at most " + MAX_ATTACHMENT / 1024 / 1024 + " MB.");
+    // Trust the file's own signature, not the browser-supplied type.
+    need(ATTACHMENT_TYPES[b.contentType](bytes), "The file content does not match its type. Upload a PDF, PNG, JPEG or WebP file.");
+    const fileName = b.fileName.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim() || "attachment";
+    return this.db.tx(async q => {
+      const target = b.entityType === "DOCUMENT"
+        ? await one(q, "SELECT id FROM documents WHERE id=$1", [b.entityId])
+        : await one(q, "SELECT id FROM journal_entries WHERE id=$1", [b.entityId]);
+      need(target, "The document or entry to attach to was not found.", 404);
+      const count = await one(q, "SELECT COUNT(*)::int AS n FROM attachments WHERE entity_type=$1 AND entity_id=$2", [b.entityType, b.entityId]);
+      need(count.n < 20, "At most 20 attachments can be added to one record.", 409);
+      const aid = id();
+      await q.query(
+        "INSERT INTO attachments(id,entity_type,entity_id,file_name,content_type,size,data,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+        [aid, b.entityType, b.entityId, fileName, b.contentType, bytes.length, bytes, actor(req).id]
+      );
+      await audit(q, actor(req), "attachment.add", aid, { entityType: b.entityType, entityId: b.entityId, fileName, size: bytes.length });
+      return { id: aid, fileName };
+    });
+  }
+  @Get("attachments/:id")
+  async download(
+    @Param("id")
+  aid: string,
+    @Res()
+  res: Response) {
+    const a = await one(this.db, "SELECT file_name,content_type,data FROM attachments WHERE id=$1", [aid]);
+    need(a, "Attachment not found.", 404);
+    const bytes = Buffer.from(a.data);
+    res.setHeader("Content-Type", a.content_type);
+    res.setHeader("Content-Length", String(bytes.length));
+    res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encodeURIComponent(a.file_name));
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+    res.end(bytes);
+  }
+  @Delete("attachments/:id")
+  async removeAttachment(
+    @Req()
+  req: any,
+    @Param("id")
+  aid: string) {
+    writer(actor(req));
+    return this.db.tx(async q => {
+      const a = await one(q, "SELECT id,entity_type,entity_id,file_name FROM attachments WHERE id=$1 FOR UPDATE", [aid]);
+      need(a, "Attachment not found.", 404);
+      await q.query("DELETE FROM attachments WHERE id=$1", [aid]);
+      await audit(q, actor(req), "attachment.remove", aid, { entityType: a.entity_type, entityId: a.entity_id, fileName: a.file_name });
+      return { ok: true };
+    });
+  }
 }
+const GSTIN_FORMAT = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+const itemSchema = z.object({
+  name: z.string().trim().min(2).max(150),
+  description: z.string().max(500).default(""),
+  hsn: z.string().trim().max(12).default(""),
+  unit: z.string().trim().max(20).default(""),
+  rate: amount.default("0"),
+  taxRate: z.string().regex(/^\d{1,3}(\.\d{1,2})?$/).refine(v => Number(v) <= 100, "GST rate cannot exceed 100%.").default("18"),
+  kind: z.enum(["SERVICE", "GOODS"]).default("SERVICE")
+});
+export const MAX_ATTACHMENT = 4 * 1024 * 1024;
+const ATTACHMENT_TYPES: Record<string, (b: Buffer) => boolean> = {
+  "application/pdf": b => b.subarray(0, 5).toString("latin1") === "%PDF-",
+  "image/png": b => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  "image/jpeg": b => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  "image/webp": b => b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP"
+};

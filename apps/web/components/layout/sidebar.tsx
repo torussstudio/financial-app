@@ -13,13 +13,17 @@ import {
   Target,
   Users,
   Wallet,
-  BookOpen
+  BookOpen,
+  Package,
+  ReceiptText
 } from "lucide-react";
 import { ActionButton } from "../action-button";
 export const navigation = [
   ["dashboard", "Overview", LayoutDashboard], ["documents", "Documents", FileText],
+  ["purchases", "Purchases & bills", ReceiptText],
   ["vouchers", "Daily vouchers", ArrowLeftRight], ["income", "Income & expenses", Wallet],
   ["capital", "Capital & investments", Landmark], ["parties", "Clients & vendors", Users],
+  ["items", "Products & services", Package],
   ["projects", "Projects", FolderKanban], ["bank", "Bank & cash", BookOpen],
   ["reports", "Reports", ChartNoAxesCombined], ["recurring", "Recurring entries", Repeat2],
   ["budgets", "Budgets", Target], ["settings", "Settings", Settings],
@@ -35,11 +39,12 @@ type Props = {
   page: string;
   mobile: boolean;
   outstandingCount: number;
+  billsDueCount?: number;
   onNavigate: (page: string) => void;
   onLogout: () => void | Promise<unknown>;
 };
 const pretty = (value: string) => value.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-export function Sidebar({ company, user, page, mobile, outstandingCount, onNavigate, onLogout }: Props) {
+export function Sidebar({ company, user, page, mobile, outstandingCount, billsDueCount = 0, onNavigate, onLogout }: Props) {
   return <aside className={`sidebar ${mobile ? "open" : ""}`}>
     <div className="brand"><div className="logo-mark">l<span>.</span></div>ledgerdesk</div>
     <div className="company-switch">
@@ -49,12 +54,13 @@ export function Sidebar({ company, user, page, mobile, outstandingCount, onNavig
     </div>
     <span className="nav-label">WORKSPACE</span>
     <nav>
-      {navigation.map(([key, label, Icon], index) => <div key={key}>
-      {index === 8 && <span className="nav-label second">INSIGHTS &amp; CONTROLS</span>}
+      {navigation.map(([key, label, Icon]) => <div key={key}>
+      {key === "reports" && <span className="nav-label second">INSIGHTS &amp; CONTROLS</span>}
       <button onClick={() => onNavigate(key)} className={page === key ? "active" : ""}>
         <Icon size={18}/>
           <span>{label}</span>
           {key === "documents" && <b>{outstandingCount}</b>}
+          {key === "purchases" && billsDueCount > 0 && <b>{billsDueCount}</b>}
       </button>
     </div>)}
     </nav>

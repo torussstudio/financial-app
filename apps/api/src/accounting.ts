@@ -41,8 +41,11 @@ export function addDays(date: string, days: number) {
 export const daysBetween = (from: string, to: string) => Math.round((Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / 86400000);
 // Posting documents (invoices, payment receipts) receive their series number only when issued, so abandoned drafts leave no gaps.
 export const DRAFT_PREFIX = "DRAFT-";
-const DOCUMENT_PREFIX: Record<string, string> = { QUOTATION: "QT", PROFORMA: "PF", INVOICE: "INV", BILL: "BILL" };
-const POSTING_DOCUMENTS = ["INVOICE", "BILL"];
+const DOCUMENT_PREFIX: Record<string, string> = { QUOTATION: "QT", PROFORMA: "PF", INVOICE: "INV", BILL: "BILL", PURCHASE: "PB" };
+// PURCHASE is a vendor bill: it is numbered and posted (expense/asset + input tax against accounts payable) when issued.
+const POSTING_DOCUMENTS = ["INVOICE", "BILL", "PURCHASE"];
+const OUTPUT_TAX = { cgst: "2100", sgst: "2110", igst: "2120" }, INPUT_TAX = { cgst: "1200", sgst: "1210", igst: "1220" };
+export const CLIENT_ADVANCES = "2300", VENDOR_ADVANCES = "1300", RECEIVABLES = "1100", PAYABLES = "2000";
 export function fiscalYear(date: string) {
   const [y, m] = date.split("-").map(Number);
   const start = m >= 4 ? y : y - 1;
@@ -291,23 +294,27 @@ export function calculateDocument(b: any) {
   need(subtotal.gt(0), "Document must have a positive subtotal.");
   return { lines, subtotal: subtotal.toFixed(2), tax: tax.toFixed(2), total: subtotal.add(tax).toFixed(2) };
 }
-// Output GST lines for an invoice (credit) or a credit note against it (debit), split per line like the printed document.
-function outputTaxLines(
+// GST lines split per line like the printed document: output tax for an invoice (credit) or a credit note against it (debit),
+// input tax for a vendor bill (debit). Zero components are left out because every journal line must carry an amount.
+function taxLines(
   d: Record<string, any>,
-  side: "debit" | "credit"
+  side: "debit" | "credit",
+  accounts: { cgst: string; sgst: string; igst: string } = OUTPUT_TAX
 ) {
   if (!new D(d.tax).gt(0))
     return [];
   if (d.interstate)
-    return [{ account: "2120", [side]: new D(d.tax).toFixed(2) }];
+    return [{ account: accounts.igst, [side]: new D(d.tax).toFixed(2) }];
   let cgst = new D(0), sgst = new D(0);
   for (const l of d.lines) {
     const half = new D(l.tax || 0).div(2).toDP(2);
     cgst = cgst.add(half);
     sgst = sgst.add(new D(l.tax || 0).sub(half));
   }
-  return [{ account: "2100", [side]: cgst.toFixed(2) }, { account: "2110", [side]: sgst.toFixed(2) }];
+  return [{ account: accounts.cgst, [side]: cgst.toFixed(2) }, { account: accounts.sgst, [side]: sgst.toFixed(2) }]
+    .filter(l => new D(l[side]).gt(0));
 }
+const outputTaxLines = (d: Record<string, any>, side: "debit" | "credit") => taxLines(d, side, OUTPUT_TAX);
 const GSTIN = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 // Particulars a live invoice must carry before it is issued (for GST invoices, the tax-invoice details from Settings and the draft).
 function checkLiveInvoice(
@@ -337,10 +344,27 @@ async function prepareDocument(
   const party = await one(q, "SELECT * FROM parties WHERE id=$1", [b.partyId]);
   need(party, "Choose an existing client or vendor.");
   const company = await one(q, "SELECT * FROM company WHERE id='company'");
+  need(!party.archived, "This contact is archived. Restore it in Clients & vendors to use it on a document.");
   need(b.dueDate >= b.date, "Due date cannot precede the issue date.");
-  if (b.taxTreatment !== "TAXABLE")
+  const purchase = b.kind === "PURCHASE";
+  // On a vendor bill the treatment is what the supplier charged; it needs no separate justification.
+  if (b.taxTreatment !== "TAXABLE" && !purchase)
     need(b.taxReason?.trim().length >= 3, "Explain the non-taxable treatment.");
   const currency = b.currency || "INR";
+  let reference = "";
+  if (purchase) {
+    need(["VENDOR", "BOTH"].includes(party.kind), "Choose a vendor for a vendor bill.");
+    need(currency === "INR", "Vendor bills are recorded in INR.");
+    reference = String(b.reference || "").trim();
+    need(reference.length > 0, "Enter the supplier's bill number.");
+    need(!new D(b.advanceAmount || 0).gt(0), "Record a vendor advance as a payment, not on the bill.");
+    const acc = await one(q, "SELECT code,kind,is_cash,voucher_category_kind FROM accounts WHERE code=$1", [b.expenseAccount || "5100"]);
+    // A bill is either an operating expense or the purchase of a fixed asset/deposit — never cash, receivables or tax accounts.
+    need(
+      acc && !acc.is_cash && (acc.kind === "EXPENSE" || (acc.kind === "ASSET" && (/^1[56]/.test(acc.code) || acc.voucher_category_kind === "ASSET"))),
+      "Choose an expense or fixed-asset account for the vendor bill."
+    );
+  }
   let incomeAccount = "4000";
   if (b.kind === "BILL") {
     // A payment receipt records money received from the party: it posts cash/bank against income when issued.
@@ -383,7 +407,25 @@ async function prepareDocument(
     email: party.email
   };
   const companySnapshot = b.company ? { ...b.company, gst_logo: "", non_gst_logo: "" } : null;
-  return { party, interstate, sums, currency, advance, status, advanceAccount, incomeAccount, client, companySnapshot };
+  const itcEligible = purchase ? b.itcEligible !== false : true;
+  return { party, interstate, sums, currency, advance, status, advanceAccount, incomeAccount, client, companySnapshot, reference, itcEligible };
+}
+// Friendly duplicate check before the database's unique index: one supplier bill number per vendor.
+async function checkVendorReference(
+  q: Queryable,
+  partyId: string,
+  reference: string,
+  docId: string
+) {
+  if (!reference)
+    return;
+  await q.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["vendor-bill:" + partyId + ":" + reference.toLowerCase()]);
+  const dup = await one(
+    q,
+    "SELECT number FROM documents WHERE kind='PURCHASE' AND status<>'CANCELLED' AND party_id=$1 AND lower(reference)=lower($2) AND id<>$3",
+    [partyId, reference, docId]
+  );
+  need(!dup, "Bill " + reference + " from this vendor is already entered (" + dup?.number + ").", 409);
 }
 async function reserveDocumentNumber(
   q: Queryable,
@@ -409,8 +451,9 @@ export async function createDocument(
     ? DRAFT_PREFIX + docId.slice(0, 8).toUpperCase()
     : await nextFreeNumber(q, DOCUMENT_PREFIX[b.kind], b.date, "documents"));
   await reserveDocumentNumber(q, num, docId);
+  await checkVendorReference(q, b.partyId, p.reference, docId);
   await q.query(
-    "INSERT INTO documents(id,number,kind,party_id,project_id,issue_date,due_date,tax_treatment,tax_reason,place_of_supply,interstate,expense_account,subtotal,tax,total,lines,notes,payment_method,source_id,created_by,currency,advance_amount,advance_status,client_snapshot,company_snapshot,income_account,advance_account) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)",
+    "INSERT INTO documents(id,number,kind,party_id,project_id,issue_date,due_date,tax_treatment,tax_reason,place_of_supply,interstate,expense_account,subtotal,tax,total,lines,notes,payment_method,source_id,created_by,currency,advance_amount,advance_status,client_snapshot,company_snapshot,income_account,advance_account,reference,itc_eligible) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)",
     [
     docId,
     num,
@@ -438,7 +481,9 @@ export async function createDocument(
     JSON.stringify(p.client),
     p.companySnapshot ? JSON.stringify(p.companySnapshot) : null,
     p.incomeAccount,
-    p.advanceAccount
+    p.advanceAccount,
+    p.reference,
+    p.itcEligible
   ]
   );
   await audit(q, actor, "document.create", docId, { number: num });
@@ -457,8 +502,9 @@ export async function updateDocument(
   const p = await prepareDocument(q, b);
   const num = (b.number || d.number).trim();
   await reserveDocumentNumber(q, num, docId);
+  await checkVendorReference(q, b.partyId, p.reference, docId);
   await q.query(
-    "UPDATE documents SET number=$2,party_id=$3,project_id=$4,issue_date=$5,due_date=$6,tax_treatment=$7,tax_reason=$8,place_of_supply=$9,interstate=$10,expense_account=$11,subtotal=$12,tax=$13,total=$14,lines=$15,notes=$16,payment_method=$17,currency=$18,advance_amount=$19,advance_status=$20,client_snapshot=$21,company_snapshot=$22,income_account=$23,advance_account=$24 WHERE id=$1",
+    "UPDATE documents SET number=$2,party_id=$3,project_id=$4,issue_date=$5,due_date=$6,tax_treatment=$7,tax_reason=$8,place_of_supply=$9,interstate=$10,expense_account=$11,subtotal=$12,tax=$13,total=$14,lines=$15,notes=$16,payment_method=$17,currency=$18,advance_amount=$19,advance_status=$20,client_snapshot=$21,company_snapshot=$22,income_account=$23,advance_account=$24,reference=$25,itc_eligible=$26 WHERE id=$1",
     [
     docId,
     num,
@@ -483,7 +529,9 @@ export async function updateDocument(
     JSON.stringify(p.client),
     p.companySnapshot ? JSON.stringify(p.companySnapshot) : null,
     p.incomeAccount,
-    p.advanceAccount
+    p.advanceAccount,
+    p.reference,
+    p.itcEligible
   ]
   );
   await audit(q, actor, "document.update", docId, { number: num });
@@ -527,6 +575,13 @@ export async function issueDocument(
         { account: d.payment_method === "Cash" ? "1010" : "1000", debit: d.total },
         { account: d.income_account || "4000", credit: d.total }
       ];
+    else if (d.kind === "PURCHASE") {
+      await checkVendorReference(q, d.party_id, d.reference, d.id);
+      // Eligible GST goes to the input-tax (ITC) accounts; ineligible GST is part of the cost.
+      const claim = d.itc_eligible && d.tax_treatment === "TAXABLE" ? taxLines(d, "debit", INPUT_TAX) : [];
+      const cost = claim.length ? d.subtotal : d.total;
+      lines = [{ account: d.expense_account, debit: cost }, ...claim, { account: PAYABLES, credit: d.total }];
+    }
     else
       lines = [{ account: "1100", debit: d.total }, { account: "4000", credit: d.subtotal }, ...outputTaxLines(d, "credit")];
     await writeJournal(
@@ -535,7 +590,7 @@ export async function issueDocument(
       {
       date: d.issue_date,
       kind: d.kind,
-      description: num + " · " + party.name,
+      description: num + (d.reference ? " (" + d.reference + ")" : "") + " · " + party.name,
       partyId: d.party_id,
       projectId: d.project_id,
       documentId: d.id,
@@ -572,53 +627,34 @@ export async function postPayment(
 ) {
   const amount = new D(b.amount), allocs = b.allocations || [];
   need(amount.gt(0), "Payment must be positive.");
-  // BILL documents are client payment receipts that settle on issue; there is no vendor-bill document to allocate against yet.
-  need(
-    b.direction === "RECEIPT",
-    "Vendor bills are not enabled yet. Record vendor payments as expense vouchers."
-  );
+  const receipt = b.direction === "RECEIPT";
+  need(receipt || b.direction === "PAYMENT", "Unsupported payment direction.");
+  const party = await one(q, "SELECT kind FROM parties WHERE id=$1", [b.partyId]);
+  need(party, "Choose an existing client or vendor.");
+  // Vendor payments settle vendor bills (PURCHASE); client receipts settle invoices.
+  if (!receipt)
+    need(["VENDOR", "BOTH"].includes(party.kind), "Choose a vendor to record a vendor payment.");
   const bank = await one(q, "SELECT * FROM accounts WHERE code=$1", [b.cashAccount]);
   need(bank?.is_cash, "Choose a bank/cash account.");
-  let allocated = new D(0);
-  const seen = new Set();
-  for (const a of [...allocs].sort((x: any, y: any) => x.documentId.localeCompare(y.documentId))) {
-    need(!seen.has(a.documentId), "Duplicate invoice allocation.");
-    seen.add(a.documentId);
-    const d = await one(q, "SELECT * FROM documents WHERE id=$1 FOR UPDATE", [a.documentId]);
-    need(
-      d?.status === "ISSUED" && d.party_id === b.partyId && d.kind === (b.direction === "RECEIPT" ? "INVOICE" : "BILL"),
-      "Allocation does not match an issued document for this party."
-    );
-    const paid = await one(
-      q,
-      "SELECT COALESCE(SUM(amount),0)::text AS paid FROM allocations WHERE document_id=$1",
-      [a.documentId]
-    );
-    need(
-      new D(a.amount).gt(0) && new D(a.amount).lte(new D(d.total).sub(paid.paid)),
-      "Allocation exceeds the outstanding balance."
-    );
-    allocated = allocated.add(a.amount);
-  }
+  const allocated = await checkAllocations(q, b.partyId, receipt ? "INVOICE" : "PURCHASE", allocs);
   need(allocated.lte(amount), "Allocations exceed the payment amount.");
   const remainder = amount.sub(allocated);
-  if (b.direction === "PAYMENT")
-    need(remainder.eq(0), "Vendor advances are not enabled; allocate the full payment to bills.");
-  if (b.direction === "RECEIPT" && remainder.gt(0)) {
+  if (receipt && remainder.gt(0)) {
     const c = await one(q, "SELECT demo FROM company WHERE id='company'");
     need(
       c.demo,
       "Live advances require a verified GST advance workflow. Allocate against an issued invoice."
     );
   }
-  let lines: any[] = [{ account: b.cashAccount, [b.direction === "RECEIPT" ? "debit" : "credit"]: amount.toFixed(2) }];
+  let lines: any[] = [{ account: b.cashAccount, [receipt ? "debit" : "credit"]: amount.toFixed(2) }];
   if (allocated.gt(0))
     lines.push({
-    account: b.direction === "RECEIPT" ? "1100" : "2000",
-    [b.direction === "RECEIPT" ? "credit" : "debit"]: allocated.toFixed(2)
+    account: receipt ? RECEIVABLES : PAYABLES,
+    [receipt ? "credit" : "debit"]: allocated.toFixed(2)
   });
+  // Money paid or received beyond the allocated bills stays as an advance for this party, to be applied later.
   if (remainder.gt(0))
-    lines.push({ account: "2300", credit: remainder.toFixed(2) });
+    lines.push(receipt ? { account: CLIENT_ADVANCES, credit: remainder.toFixed(2) } : { account: VENDOR_ADVANCES, debit: remainder.toFixed(2) });
   const supplied = b.client ? {
     name: b.client.name,
     address: b.client.address,
@@ -647,6 +683,93 @@ export async function postPayment(
   );
   return entry;
 }
+// Validates allocations against issued documents of one party and kind, locking them in a stable order; returns the total.
+async function checkAllocations(
+  q: Queryable,
+  partyId: string,
+  kind: "INVOICE" | "PURCHASE",
+  allocs: { documentId: string; amount: string }[]
+) {
+  let allocated = new D(0);
+  const seen = new Set();
+  for (const a of [...allocs].sort((x, y) => x.documentId.localeCompare(y.documentId))) {
+    need(!seen.has(a.documentId), "Duplicate " + (kind === "INVOICE" ? "invoice" : "bill") + " allocation.");
+    seen.add(a.documentId);
+    const d = await one(q, "SELECT * FROM documents WHERE id=$1 FOR UPDATE", [a.documentId]);
+    need(
+      d?.status === "ISSUED" && d.party_id === partyId && d.kind === kind,
+      "Allocation does not match an issued document for this party."
+    );
+    const paid = await one(
+      q,
+      "SELECT COALESCE(SUM(amount),0)::text AS paid FROM allocations WHERE document_id=$1",
+      [a.documentId]
+    );
+    need(
+      new D(a.amount).gt(0) && new D(a.amount).lte(new D(d.total).sub(paid.paid)),
+      "Allocation exceeds the outstanding balance of " + d.number + "."
+    );
+    allocated = allocated.add(a.amount);
+  }
+  return allocated;
+}
+// Advance still available for a party: client advances are a liability (credit balance), vendor advances an asset (debit balance).
+export async function availableAdvance(
+  q: Queryable,
+  direction: "RECEIPT" | "PAYMENT",
+  partyId: string,
+  asOf?: string
+) {
+  const r = await one(
+    q,
+    "SELECT COALESCE(SUM(l.debit-l.credit),0)::text AS balance FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id WHERE e.party_id=$1 AND l.account_code=$2" + (asOf ? " AND e.entry_date<=$3::date" : ""),
+    asOf ? [partyId, direction === "RECEIPT" ? CLIENT_ADVANCES : VENDOR_ADVANCES, asOf] : [partyId, direction === "RECEIPT" ? CLIENT_ADVANCES : VENDOR_ADVANCES]
+  );
+  const balance = new D(r.balance);
+  return direction === "RECEIPT" ? balance.neg() : balance;
+}
+// Applies an advance received from a client to its invoices (Dr client advances / Cr receivables), or an advance paid to a
+// vendor to its bills (Dr payables / Cr vendor advances). No cash moves and no income or expense is created.
+export async function applyAdvance(
+  q: Queryable,
+  actor: Actor,
+  b: {
+  direction: "RECEIPT" | "PAYMENT";
+  partyId: string;
+  date: string;
+  description?: string;
+  allocations: { documentId: string; amount: string }[]
+}
+) {
+  const receipt = b.direction === "RECEIPT";
+  const party = await one(q, "SELECT name FROM parties WHERE id=$1", [b.partyId]);
+  need(party, "Choose an existing client or vendor.");
+  await q.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["advance:" + b.direction + ":" + b.partyId]);
+  const total = await checkAllocations(q, b.partyId, receipt ? "INVOICE" : "PURCHASE", b.allocations);
+  need(total.gt(0), "Allocate the advance to at least one " + (receipt ? "invoice" : "bill") + ".");
+  const available = await availableAdvance(q, b.direction, b.partyId, b.date);
+  need(total.lte(available), "Only " + available.toFixed(2) + " of advance is available for " + party.name + " on this date.");
+  const amount = total.toFixed(2);
+  const entry = await writeJournal(
+    q,
+    actor,
+    {
+    date: b.date,
+    kind: "ADVANCE_APPLIED",
+    description: b.description?.trim() || (receipt ? "Client advance applied" : "Vendor advance applied") + " · " + party.name,
+    partyId: b.partyId,
+    lines: receipt
+      ? [{ account: CLIENT_ADVANCES, debit: amount }, { account: RECEIVABLES, credit: amount }]
+      : [{ account: PAYABLES, debit: amount }, { account: VENDOR_ADVANCES, credit: amount }]
+  }
+  );
+  for (const a of b.allocations)
+    await q.query(
+      "INSERT INTO allocations(id,entry_id,document_id,amount) VALUES($1,$2,$3,$4)",
+      [id(), entry.id, a.documentId, a.amount]
+    );
+  return entry;
+}
 export async function reverseJournal(
   q: Queryable,
   actor: Actor,
@@ -658,7 +781,7 @@ export async function reverseJournal(
   need(e, "Entry not found.", 404);
   need(
     !e.document_id && !e.reversal_of,
-    "Correct document postings with a credit note (invoices) or cancellation (payment receipts)."
+    "Correct document postings with a credit note (invoices) or cancellation (payment receipts and vendor bills)."
   );
   return postReversal(q, actor, e, date, reason);
 }
@@ -680,6 +803,17 @@ async function postReversal(
     "SELECT account_code AS account,credit::text AS debit,debit::text AS credit FROM journal_lines WHERE entry_id=$1",
     [e.id]
   )).rows;
+  // An advance that has since been applied to invoices/bills cannot be taken back until that application is reversed.
+  if (e.party_id)
+    for (const [account, direction] of [[CLIENT_ADVANCES, "RECEIPT"], [VENDOR_ADVANCES, "PAYMENT"]] as const) {
+      const created = lines.filter(l => l.account === account)
+        .reduce<D>((s, l) => s.add(direction === "RECEIPT" ? new D(l.debit).sub(l.credit) : new D(l.credit).sub(l.debit)), new D(0));
+      if (created.gt(0))
+        need(
+          (await availableAdvance(q, direction, e.party_id)).gte(created),
+          "Part of this advance has already been applied. Reverse the advance application first."
+        );
+    }
   const reversal = await writeJournal(
     q,
     actor,
@@ -830,7 +964,13 @@ export async function cancelDocument(
   if (d.status === "ISSUED") {
     need(d.kind !== "INVOICE", "An issued invoice is corrected with a credit note, not cancelled.", 409);
     need(d.kind !== "CREDIT_NOTE", "An issued credit note cannot be cancelled.", 409);
-    if (d.kind === "BILL") {
+    if (d.kind === "PURCHASE")
+      need(
+        (await sumAllocations(q, docId)).eq(0),
+        "This vendor bill has payments or advances applied. Reverse them before cancelling the bill.",
+        409
+      );
+    if (d.kind === "BILL" || d.kind === "PURCHASE") {
       const e = await one(q, "SELECT *,entry_date::text FROM journal_entries WHERE document_id=$1 FOR UPDATE", [docId]);
       if (e)
         await postReversal(q, actor, e, b.date, "Cancelled " + d.number + ": " + b.reason.trim());

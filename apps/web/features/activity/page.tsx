@@ -133,12 +133,14 @@ export function LedgerActivityPages({ ctx }: Props) {
             <option value="">All categories</option>
             {accounts.filter((a: Row) => ["INCOME", "EXPENSE"].includes(a.kind)).map((a: Row) => <option key={a.code} value={a.code}>{a.name}</option>)}
           </select>}
-          {canWrite && page === "vouchers" && <><button className="btn small-btn" onClick={() => open("payment")}>Record receipt</button><button className="btn small-btn" onClick={() => open("journal")}>Journal entry</button></>}
+          {canWrite && page === "vouchers" && <><button className="btn small-btn" onClick={() => open("payment")}>Record receipt</button><button className="btn small-btn" onClick={() => open("payment", { direction: "PAYMENT" })}>Pay vendor</button><button className="btn small-btn" onClick={() => open("journal")}>Journal entry</button></>}
         </div>
         <EntryTable rows={txs}
     canWrite={canWrite}
     onReceipt={viewReceipt}
-    onReverse={(entry: Row) => open("reverse", { entry })}/>
+    onReverse={(entry: Row) => open("reverse", { entry })}
+    onAttach={(entry: Row) => entry.document_id ? ctx.attach("DOCUMENT", entry.document_id, entry.number) : ctx.attach("ENTRY", entry.id, entry.number)}
+    attachmentCounts={data.attachmentCounts}/>
         <div className="panel-note">Latest 250 entries in the selected period. Posted amounts include applicable tax; operating totals above exclude output GST.</div>
       </section>}</>}</>;
 }

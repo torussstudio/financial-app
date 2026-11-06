@@ -38,7 +38,9 @@ export async function getReport(
     budgets,
     recurring,
     bank,
-    audit
+    audit,
+    items,
+    attachmentCounts
   ] = await Promise.all([
     db.query(
       "SELECT e.id,e.number,e.description,e.entry_date::text,e.kind,e.party_id,e.project_id,p.name AS party_name,a.code,a.name,a.kind AS account_kind,a.is_cash,a.voucher_category_kind,l.debit::text,l.credit::text FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id JOIN accounts a ON a.code=l.account_code LEFT JOIN parties p ON p.id=e.party_id WHERE " + cond + " ORDER BY e.entry_date,e.created_at",
@@ -58,11 +60,11 @@ export async function getReport(
       [f.to]
     ),
     db.query(
-      "SELECT p.*,COALESCE((SELECT SUM(l.debit-l.credit) FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id WHERE e.party_id=p.id AND l.account_code='1100' AND e.entry_date<=$1::date),0)::text AS receivable,COALESCE((SELECT SUM(l.credit-l.debit) FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id WHERE e.party_id=p.id AND l.account_code='2000' AND e.entry_date<=$1::date),0)::text AS payable FROM parties p ORDER BY name",
+      "SELECT p.*,COALESCE((SELECT SUM(l.debit-l.credit) FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id WHERE e.party_id=p.id AND l.account_code='1100' AND e.entry_date<=$1::date),0)::text AS receivable,COALESCE((SELECT SUM(l.credit-l.debit) FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id WHERE e.party_id=p.id AND l.account_code='2000' AND e.entry_date<=$1::date),0)::text AS payable,COALESCE((SELECT SUM(l.credit-l.debit) FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id WHERE e.party_id=p.id AND l.account_code='2300' AND e.entry_date<=$1::date),0)::text AS advance_received,COALESCE((SELECT SUM(l.debit-l.credit) FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id WHERE e.party_id=p.id AND l.account_code='1300' AND e.entry_date<=$1::date),0)::text AS advance_paid FROM parties p ORDER BY p.archived,p.name",
       [f.to]
     ),
     db.query("SELECT * FROM accounts ORDER BY code"),
-    db.query("SELECT p.*,a.name AS party_name FROM projects p LEFT JOIN parties a ON a.id=p.party_id ORDER BY p.name"),
+    db.query("SELECT p.*,a.name AS party_name FROM projects p LEFT JOIN parties a ON a.id=p.party_id ORDER BY p.archived,p.name"),
     db.query("SELECT *,closed_through::text FROM company WHERE id='company'"),
     db.query(
       "SELECT b.*,a.name,COALESCE((SELECT SUM(l.debit-l.credit) FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id WHERE l.account_code=b.account_code AND to_char(e.entry_date,'YYYY-MM')=b.month),0)::text AS actual FROM budgets b JOIN accounts a ON a.code=b.account_code WHERE month=$1",
@@ -73,7 +75,9 @@ export async function getReport(
       [month]
     ),
     db.query("SELECT b.*,b.entry_date::text,a.name AS account_name FROM bank_statement_lines b JOIN accounts a ON a.code=b.account_code ORDER BY b.entry_date DESC LIMIT 250"),
-    db.query("SELECT a.*,u.name AS actor_name FROM audit_events a LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.created_at DESC LIMIT 100")
+    db.query("SELECT a.*,u.name AS actor_name FROM audit_events a LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.created_at DESC LIMIT 100"),
+    db.query("SELECT id,name,description,hsn,unit,rate::text,tax_rate::text,kind,archived FROM items ORDER BY archived,name"),
+    db.query("SELECT entity_id,COUNT(*)::int AS n FROM attachments GROUP BY entity_id")
   ]);
   let income = new D(0), expense = new D(0), receipts = new D(0), payments = new D(0);
   const byMonth = new Map<string, {
@@ -138,9 +142,14 @@ export async function getReport(
       payments: payments.toFixed(2),
       cash: total(balances.rows.filter(a => a.is_cash), "balance"),
       receivables: total(outstanding, "outstanding"),
-      // Payment receipts settle when issued and vendor bills are not a document type yet, so payables come from the ledger.
-      payables: new D(balances.rows.find(a => a.code === "2000")?.balance || 0).neg().toFixed(2)
+      // Payables come from the ledger: posted vendor bills less vendor payments and applied advances.
+      payables: new D(balances.rows.find(a => a.code === "2000")?.balance || 0).neg().toFixed(2),
+      inputTax: total(balances.rows.filter(a => ["1200", "1210", "1220"].includes(a.code)), "balance"),
+      vendorAdvances: new D(balances.rows.find(a => a.code === "1300")?.balance || 0).toFixed(2),
+      clientAdvances: new D(balances.rows.find(a => a.code === "2300")?.balance || 0).neg().toFixed(2)
     },
+    items: items.rows,
+    attachmentCounts: Object.fromEntries(attachmentCounts.rows.map(r => [r.entity_id, r.n])),
     monthly: [...byMonth.entries()].map(([month, x]) => ({ month, income: x.income.toNumber(), expense: x.expense.toNumber() })),
     expenseBreakdown: [...byExpense.entries()].map(([name, value]) => ({ name, value: value.toNumber() })),
     entries: entries.rows,

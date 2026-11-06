@@ -16,7 +16,8 @@ if (preview && process.env.NODE_ENV === "production")
   throw new Error("Embedded preview database is disabled in production.");
 const db = await createDatabase({
   url: process.env.DATABASE_URL,
-  embedded: preview ? fileURLToPath(new URL("../.data/preview", import.meta.url)) : false
+  // DEV_EMBEDDED_DB_PATH lets a second local preview keep its own embedded database.
+  embedded: preview ? process.env.DEV_EMBEDDED_DB_PATH || fileURLToPath(new URL("../.data/preview", import.meta.url)) : false
 });
 await migrate(db);
 await bootstrap(
@@ -64,7 +65,8 @@ class Errors implements ExceptionFilter {
 class AppModule {
 }
 const app = await NestFactory.create(AppModule, { logger: ["error", "warn"], bodyParser: false });
-app.use(json({ limit: "4mb" }));
+// Attachments arrive base64-encoded (at most 4 MB of file data, about 5.4 MB of JSON).
+app.use(json({ limit: "6mb" }));
 // Requests arrive through the Next.js proxy; trust it so req.ip is the browser's address, not the proxy's for everyone.
 app.getHttpAdapter().getInstance().set("trust proxy", process.env.TRUST_PROXY || "loopback, uniquelocal");
 app.useGlobalFilters(new Errors());

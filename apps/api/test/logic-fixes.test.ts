@@ -126,10 +126,10 @@ test("asset vouchers cannot post to control accounts such as receivables", async
   await db.tx(q => postVoucher(q, actor, { ...asset, account: "1520" }));
   await db.tx(q => postVoucher(q, actor, { ...asset, kind: "INVESTMENT", account: "1410" }));
 });
-test("vendor payments are rejected until vendor bills exist", async () => {
+test("vendor payments need a vendor contact", async () => {
   await assert.rejects(
     () => db.tx(q => postPayment(q, actor, { direction: "PAYMENT", partyId: pid, date: "2026-12-05", amount: "10", cashAccount: "1000", description: "Vendor", allocations: [] })),
-    /expense vouchers/
+    /Choose a vendor/
   );
 });
 test("budgets and recurring schedules use the end-date month and whole-month actuals", async () => {

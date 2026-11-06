@@ -1,4 +1,4 @@
-import { Users, ShieldCheck, LockKeyhole, } from "lucide-react";
+import { Users, ShieldCheck, LockKeyhole, KeyRound } from "lucide-react";
 import { CompanySettingsForm } from "../../components/forms/company-settings-form";
 import { ActionButton } from "../../components/action-button";
 import { EntryTable } from "../../components/entry-table";
@@ -37,10 +37,19 @@ export function SettingsPage({ ctx }: Props) {
           <Users size={22}/>
           <h2>Team access</h2>
           <p>Admin, accountant and viewer permissions are checked by the API.</p>
-          {session.user.role === "ADMIN" && <><button className="btn" onClick={() => open("user")}>Add user</button><ActionButton className="link" onClick={() => api("users").then(setUsers).catch(fail("Couldn't load team members"))}>View users</ActionButton>{users.map((u: Row) => <div className="user-row" key={u.id}>
-              <strong>{u.name}</strong>
-              <small>{u.email} · {pretty(u.role)}</small>
+          {session.user.role === "ADMIN" && <><button className="btn" onClick={() => open("user")}>Add user</button><ActionButton className="link" onClick={() => api("users").then(setUsers).catch(fail("Couldn't load team members"))}>{users.length ? "Reload users" : "View users"}</ActionButton>{users.map((u: Row) => <div className="user-row" key={u.id}>
+              <div>
+                <strong>{u.name}{u.id === session.user.id ? " (you)" : ""}</strong>
+                <small>{u.email} · {pretty(u.role)}{u.active ? "" : " · disabled"}</small>
+              </div>
+              <button className="link small" onClick={() => open("userEdit", { user: u })}>Edit</button>
             </div>)}</>}
+        </section>
+        <section className="panel control-card">
+          <KeyRound size={22}/>
+          <h2>Your password</h2>
+          <p>Signed in as {session.user.email}. Changing your password signs out your other devices.</p>
+          <button className="btn" onClick={() => open("password")}>Change my password</button>
         </section>
         <section className="panel control-card">
           <ShieldCheck size={22}/>

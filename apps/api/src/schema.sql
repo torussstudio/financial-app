@@ -119,3 +119,21 @@ DO $$ BEGIN
   INSERT INTO schema_versions(version) VALUES(2);
  END IF;
 END $$;
+-- Version 3: editable/archivable masters, products & services, vendor bills (PURCHASE) with input tax credit, attachments.
+ALTER TABLE parties ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS reference text NOT NULL DEFAULT '';
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS itc_eligible boolean NOT NULL DEFAULT true;
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='documents_kind_valid' AND pg_get_constraintdef(oid) LIKE '%PURCHASE%') THEN
+  ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_kind_valid;
+  ALTER TABLE documents ADD CONSTRAINT documents_kind_valid CHECK(kind IN ('QUOTATION','PROFORMA','INVOICE','BILL','CREDIT_NOTE','PURCHASE'));
+ END IF;
+END $$;
+-- The same supplier bill can only be entered once (cancelled entries free the reference).
+CREATE UNIQUE INDEX IF NOT EXISTS one_vendor_bill_reference ON documents(party_id,lower(reference)) WHERE kind='PURCHASE' AND status<>'CANCELLED' AND reference<>'';
+CREATE TABLE IF NOT EXISTS items(id text PRIMARY KEY,name text NOT NULL,description text NOT NULL DEFAULT '',hsn text NOT NULL DEFAULT '',unit text NOT NULL DEFAULT '',rate numeric(18,2) NOT NULL DEFAULT 0 CHECK(rate>=0),tax_rate numeric(5,2) NOT NULL DEFAULT 18 CHECK(tax_rate>=0 AND tax_rate<=100),kind text NOT NULL DEFAULT 'SERVICE' CHECK(kind IN ('SERVICE','GOODS')),archived boolean NOT NULL DEFAULT false,created_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS item_name ON items(lower(name));
+CREATE TABLE IF NOT EXISTS attachments(id text PRIMARY KEY,entity_type text NOT NULL CHECK(entity_type IN ('DOCUMENT','ENTRY')),entity_id text NOT NULL,file_name text NOT NULL,content_type text NOT NULL,size integer NOT NULL CHECK(size>0),data bytea NOT NULL,uploaded_by text REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS attachment_entity ON attachments(entity_type,entity_id);
+INSERT INTO schema_versions(version) VALUES(3) ON CONFLICT DO NOTHING;

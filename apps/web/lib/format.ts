@@ -10,8 +10,18 @@ export const short = (v: number) => Math.abs(v) >= 100000 ? "₹" + (v / 100000)
 export const pretty = (s: string) => s === "ASSET" ? "Assets" : s === "REIMBURSEMENT" ? "Reimbursements" : s ? s.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : "";
 // Names used in notifications, e.g. "Quotation draft saved", "Payment receipt cancelled".
 export const documentLabel = (kind: string) => ({
-  INVOICE: "Invoice", QUOTATION: "Quotation", PROFORMA: "Proforma", BILL: "Payment receipt", CREDIT_NOTE: "Credit note"
+  INVOICE: "Invoice", QUOTATION: "Quotation", PROFORMA: "Proforma", BILL: "Payment receipt", CREDIT_NOTE: "Credit note", PURCHASE: "Vendor bill"
 } as Record<string, string>)[kind] || "Document";
+// Reads a chosen file as base64 (without the data: prefix) for the attachments API.
+export const fileToBase64 = (file: File) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+  reader.onerror = () => reject(Error("Couldn't read " + file.name + "."));
+  reader.readAsDataURL(file);
+});
+export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+export const ATTACHMENT_ACCEPT = "application/pdf,image/png,image/jpeg,image/webp";
+export const outstandingOf = (d: Row) => Math.max(0, Number(moneySub(d.total, d.paid)));
 export const voucherLabel = (kind: string) => ({
   EXPENSE: "Expense", INCOME: "Income", CAPITAL_IN: "Capital in", CAPITAL_RETURN: "Capital return", INVESTMENT: "Investment",
   ASSET: "Asset purchase", REIMBURSEMENT: "Reimbursement", LOAN_IN: "Loan received", LOAN_REPAY: "Loan repayment"

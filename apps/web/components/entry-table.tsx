@@ -1,13 +1,16 @@
-import { ArrowUpRight, ArrowDownLeft, Printer } from "lucide-react";
+import { ArrowUpRight, ArrowDownLeft, Paperclip, Printer } from "lucide-react";
 import { Badge, Empty } from "./ui";
 import { ActionButton } from "./action-button";
 import { day, money, pretty, type Row } from "../lib/format";
-export function EntryTable({ rows, compact = false, canWrite, onReceipt, onReverse }: {
+const OUT = ["EXPENSE", "REIMBURSEMENT", "ASSET", "PAYMENT", "CREDIT_NOTE", "PURCHASE"];
+export function EntryTable({ rows, compact = false, canWrite, onReceipt, onReverse, onAttach, attachmentCounts = {} }: {
   rows: Row[];
   compact?: boolean;
   canWrite: boolean;
   onReceipt: (id: string) => void | Promise<void>;
   onReverse: (entry: Row) => void;
+  onAttach?: (entry: Row) => void;
+  attachmentCounts?: Record<string, number>;
 }) {
   return rows.length ? <div className="table-scroll">
     <table>
@@ -24,8 +27,8 @@ export function EntryTable({ rows, compact = false, canWrite, onReceipt, onRever
         {rows.map(e => <tr key={e.id}>
           <td>
             <div className="cell-title">
-              <span className={"entry-icon " + (["EXPENSE", "REIMBURSEMENT", "ASSET", "PAYMENT", "CREDIT_NOTE"].includes(e.kind) ? "out" : "")}>
-                {["EXPENSE", "REIMBURSEMENT", "ASSET", "PAYMENT", "CREDIT_NOTE"].includes(e.kind) ? <ArrowUpRight size={16}/> : <ArrowDownLeft size={16}/>}
+              <span className={"entry-icon " + (OUT.includes(e.kind) ? "out" : "")}>
+                {OUT.includes(e.kind) ? <ArrowUpRight size={16}/> : <ArrowDownLeft size={16}/>}
               </span>
               <div>
                 <strong>{e.description}</strong>
@@ -35,13 +38,16 @@ export function EntryTable({ rows, compact = false, canWrite, onReceipt, onRever
           </td>
           <td className="muted nowrap">{day(e.entry_date)}</td>
           <td>
-            <Badge tone={["EXPENSE", "REIMBURSEMENT", "ASSET"].includes(e.kind) ? "amber" : e.kind.includes("CAPITAL") ? "blue" : ""}>
-              {e.reversed_by ? "Reversed" : pretty(e.kind)}
+            <Badge tone={["EXPENSE", "REIMBURSEMENT", "ASSET", "PURCHASE"].includes(e.kind) ? "amber" : e.kind.includes("CAPITAL") ? "blue" : ""}>
+              {e.reversed_by ? "Reversed" : e.kind === "PURCHASE" ? "Vendor bill" : e.kind === "PAYMENT" ? "Vendor payment" : pretty(e.kind)}
             </Badge>
           </td>
           <td className="right amount">{money(e.amount)}</td>
           {!compact && <td className="right">
             <div className="row-actions">
+              {onAttach && <button className="icon-btn attach-btn" title="Attachments" onClick={() => onAttach(e)}>
+                <Paperclip size={15}/>{attachmentCounts[e.document_id || e.id] ? <span>{attachmentCounts[e.document_id || e.id]}</span> : null}
+              </button>}
               {["RECEIPT", "PAYMENT"].includes(e.kind) && <ActionButton className="icon-btn" title="View receipt" onClick={() => onReceipt(e.id)}>
                 <Printer size={15}/>
               </ActionButton>}

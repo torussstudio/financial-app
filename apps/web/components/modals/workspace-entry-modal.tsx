@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { ActionButton } from "../action-button";
-import { localDate, moneySub } from "../../lib/format";
+import { ATTACHMENT_ACCEPT, localDate, moneySub } from "../../lib/format";
+import { AllocationTable } from "./allocation-table";
+import { AttachmentsPanel } from "./attachments-panel";
 type Row = Record<string, any>;
 export function WorkspaceEntryModal({ context }: {
   context: any
@@ -57,16 +59,57 @@ export function WorkspaceEntryModal({ context }: {
     setDocumentCompany,
     companyDocumentProfile,
     docPartyId,
-    setDocPartyId
+    setDocPartyId,
+    selectableParties,
+    uploadFile,
+    downloadAttachment,
+    api,
+    notify,
+    refresh,
+    canWrite,
+    session
   } = context;
   const [addingCategory, setAddingCategory] = useState(false),
     [categoryName, setCategoryName] = useState(""),
     [voucherCategoryValue, setVoucherCategoryValue] = useState("");
+  // Payment / advance allocation state: the party, the amount being allocated and the amount per open document.
+  const [payParty, setPayParty] = useState(""),
+    [payAmount, setPayAmount] = useState(""),
+    [alloc, setAlloc] = useState<Record<string, string>>({});
   useEffect(() => {
     setAddingCategory(false);
     setCategoryName("");
     setVoucherCategoryValue("");
+    const d = modal?.document;
+    if (modal?.type === "payment" && d) {
+      const due = moneySub(d.total, d.paid);
+      setPayParty(d.party_id);
+      setPayAmount(due);
+      setAlloc({ [d.id]: due });
+    }
+    else if (modal?.type === "advance") {
+      setPayParty(modal.partyId || d?.party_id || "");
+      setPayAmount("");
+      setAlloc({});
+    }
+    else {
+      setPayParty("");
+      setPayAmount("");
+      setAlloc({});
+    }
   }, [modal]);
+  const items: Row[] = (data?.items || []).filter((i: Row) => !i.archived);
+  // Picking a saved product/service fills its HSN/SAC, rate and GST; typing anything else keeps the text as entered.
+  const withItem = (line: Row, description: string) => {
+    const item = items.find(i => i.name.toLowerCase() === description.trim().toLowerCase());
+    if (!item) return { ...line, description };
+    return { ...line, description: item.name, hsn: item.hsn || line.hsn, price: Number(item.rate) > 0 ? String(Number(item.rate)) : line.price, taxRate: String(Number(item.tax_rate)) };
+  };
+  const paymentDirection = modal?.direction === "PAYMENT" ? "PAYMENT" : "RECEIPT";
+  const openDocsFor = (partyId: string, kind: string) => (data?.documents || [])
+    .filter((d: Row) => d.kind === kind && d.status === "ISSUED" && d.party_id === partyId && Number(moneySub(d.total, d.paid)) > 0);
+  const advanceOf = (p: Row | undefined, direction: string) => Number((direction === "PAYMENT" ? p?.advance_paid : p?.advance_received) || 0);
+  const fixedAssetOrExpense = accounts.filter((a: Row) => !a.is_cash && (a.kind === "EXPENSE" || (a.kind === "ASSET" && (/^1[56]/.test(a.code) || a.voucher_category_kind === "ASSET"))));
   const isPartyVoucherCategory = ["INCOME", "CAPITAL_IN", "CAPITAL_RETURN", "REIMBURSEMENT", "LOAN_IN", "LOAN_REPAY"].includes(formKind);
   const categoryItems: Row[] = voucherCategoryItems(formKind);
   const categoryLabel = ({
@@ -103,18 +146,24 @@ export function WorkspaceEntryModal({ context }: {
     role="dialog"
     aria-modal="true"
     aria-labelledby="modal-title"
-    className={"modal " + (modal.type === "document" ? "large" : "")}>
+    className={"modal " + (["document", "purchase"].includes(modal.type) ? "large" : "")}>
         <div className="modal-heading">
           <div>
             <span className="eyebrow">WORKSPACE ENTRY</span>
             <h2 id="modal-title">
               {({
-    party: "Add a contact",
-    project: "Create a project",
+    party: modal.party ? "Edit contact" : "Add a contact",
+    project: modal.project ? "Edit project" : "Create a project",
+    item: modal.item ? "Edit product / service" : "Add a product or service",
+    purchase: modal.document ? "Edit vendor bill" : "Enter a vendor bill",
+    userEdit: "Edit team member",
+    password: "Change your password",
+    advance: paymentDirection === "PAYMENT" ? "Apply vendor advance" : "Apply client advance",
+    attachments: "Attachments" + (modal.title ? " · " + modal.title : ""),
     voucher: "New daily voucher",
     capital: "Record funding movement",
-    document: "Create a document",
-    payment: "Record a payment",
+    document: modal.document ? "Edit document" : "Create a document",
+    payment: paymentDirection === "PAYMENT" ? "Pay a vendor" : "Record a receipt",
     budget: "Set a monthly budget",
     recurring: "New recurring entry",
     import: "Import bank statement",
@@ -132,19 +181,49 @@ export function WorkspaceEntryModal({ context }: {
             <X size={20}/>
           </button>
         </div>
+        {modal.type === "attachments" ? <>
+          <AttachmentsPanel entityType={modal.entityType} entityId={modal.entityId} canWrite={canWrite} api={api}
+            upload={uploadFile} download={downloadAttachment} notify={notify} onChanged={refresh}/>
+          <div className="modal-actions"><button className="btn primary" type="button" onClick={() => setModal(null)}>Done <Check size={16}/></button></div>
+        </> : <>
         {error && <div role="alert" className="error">{error}</div>}
+        <datalist id="item-options">
+          {items.map(i => <option key={i.id} value={i.name}>{[i.hsn && "HSN/SAC " + i.hsn, Number(i.rate) > 0 && money(i.rate), i.tax_rate + "% GST"].filter(Boolean).join(" · ")}</option>)}
+        </datalist>
         <form onSubmit={submit}>
           <div className="form-grid">
- {modal.type === "party" && <><Field label="Client / vendor name" wide><input name="name" required/></Field><Field label="Contact name"><input name="contactName"/></Field><Field label="Type">
-                <select name="kind">
+ {modal.type === "party" && <><Field label="Client / vendor name" wide><input name="name" required minLength={2} defaultValue={modal.party?.name || ""}/></Field><Field label="Contact name"><input name="contactName" defaultValue={modal.party?.contact_name || ""}/></Field><Field label="Type">
+                <select name="kind" defaultValue={modal.party?.kind || modal.kind || "CLIENT"}>
                   <option value="CLIENT">Client</option>
                   <option value="VENDOR">Vendor</option>
                   <option value="BOTH">Client & vendor</option>
                 </select>
-              </Field><Field label="Email"><input name="email" type="email"/></Field><Field label="Phone"><input name="phone"/></Field><Field label="GSTIN (optional)"><input name="gstin"/></Field><Field label="Address" wide><textarea name="address"/></Field></>}
- {modal.type === "project" && <><Field label="Project name" wide><input name="name" required/></Field><Field label="Client">{partySelect()}</Field><Field label="Budget (₹)">
-                <input name="budget" type="number" min="0" step=".01" defaultValue="0" required/>
-              </Field></>}
+              </Field><Field label="Email"><input name="email" type="email" defaultValue={modal.party?.email || ""}/></Field><Field label="Phone"><input name="phone" defaultValue={modal.party?.phone || ""}/></Field><Field label="GSTIN (optional)"><input name="gstin" maxLength={15} pattern="[0-9]{2}[A-Za-z]{5}[0-9]{4}[A-Za-z][1-9A-Za-z][Zz][0-9A-Za-z]" title="15-character GSTIN" defaultValue={modal.party?.gstin || ""}/></Field><Field label="Address" wide><textarea name="address" defaultValue={modal.party?.address || ""}/></Field>
+              {modal.party && <><label className="check-field wide"><input type="checkbox" name="archived" defaultChecked={Boolean(modal.party.archived)}/> Archived — hide from new documents, vouchers and payments</label>
+              <div className="form-note wide">Issued documents keep the details they were issued with. Changes here apply to new documents.</div></>}</>}
+ {modal.type === "project" && <><Field label="Project name" wide><input name="name" required minLength={2} defaultValue={modal.project?.name || ""}/></Field><Field label="Client">
+                <select name="partyId" defaultValue={modal.project?.party_id || ""}>
+                  <option value="">Internal project</option>
+                  {selectableParties("CLIENT", modal.project?.party_id).map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </Field><Field label="Budget (₹)">
+                <input name="budget" type="number" min="0" step=".01" defaultValue={modal.project ? String(Number(modal.project.budget)) : "0"} required/>
+              </Field>{modal.project && <label className="check-field wide"><input type="checkbox" name="archived" defaultChecked={Boolean(modal.project.archived)}/> Archived — completed or on hold; hidden from new entries</label>}</>}
+ {modal.type === "item" && <><Field label="Name" wide><input name="name" required minLength={2} maxLength={150} defaultValue={modal.item?.name || ""} placeholder="e.g. Brand identity design"/></Field><Field label="Type">
+                <select name="kind" defaultValue={modal.item?.kind || "SERVICE"}><option value="SERVICE">Service (SAC)</option><option value="GOODS">Goods (HSN)</option></select>
+              </Field><Field label="HSN / SAC"><input name="hsn" maxLength={12} defaultValue={modal.item?.hsn || ""}/></Field><Field label="Default rate (₹)">
+                <input name="rate" type="number" min="0" step=".01" defaultValue={modal.item ? String(Number(modal.item.rate)) : ""}/>
+              </Field><Field label="GST %"><input name="taxRate" type="number" min="0" max="100" step=".01" required defaultValue={modal.item ? String(Number(modal.item.tax_rate)) : "18"}/></Field><Field label="Unit"><input name="unit" maxLength={20} placeholder="hrs, nos, sq.ft…" defaultValue={modal.item?.unit || ""}/></Field><Field label="Description" wide><textarea name="description" maxLength={500} defaultValue={modal.item?.description || ""}/></Field>
+              {modal.item && <label className="check-field wide"><input type="checkbox" name="archived" defaultChecked={Boolean(modal.item.archived)}/> Archived — no longer offered on new documents</label>}
+              <div className="form-note wide">Typing this name on a document line fills the HSN / SAC, rate and GST %. Documents keep their own copy, so editing an item never changes saved documents.</div></>}
+ {modal.type === "userEdit" && <><Field label="Full name" wide><input name="name" required minLength={2} defaultValue={modal.user.name}/></Field><Field label="Email"><input value={modal.user.email} disabled/></Field><Field label="Role">
+                <select name="role" defaultValue={modal.user.role} disabled={modal.user.id === session?.user?.id}>
+                  <option value="ACCOUNTANT">Accountant</option><option value="VIEWER">Viewer</option><option value="ADMIN">Admin</option>
+                </select>
+              </Field>{modal.user.id === session?.user?.id && <input type="hidden" name="role" value={modal.user.role}/>}
+              {modal.user.id !== session?.user?.id ? <><label className="check-field wide"><input type="checkbox" name="active" defaultChecked={modal.user.active}/> Active — can sign in (disabling signs them out everywhere)</label>
+              <Field label="Reset password (optional, at least 12 characters)" wide><input name="newPassword" type="password" minLength={12} autoComplete="new-password"/></Field></> : <><input type="hidden" name="active" value="on"/><div className="form-note wide">You can't change your own role or disable yourself. Use “Change my password” for your password.</div></>}</>}
+ {modal.type === "password" && <><Field label="Current password" wide><input name="currentPassword" type="password" required autoComplete="current-password"/></Field><Field label="New password (at least 12 characters)"><input name="newPassword" type="password" minLength={12} required autoComplete="new-password"/></Field><Field label="Confirm new password"><input name="confirmPassword" type="password" minLength={12} required autoComplete="new-password"/></Field><div className="form-note wide">Your other signed-in devices will be signed out.</div></>}
  {["voucher", "capital"].includes(modal.type) && <><Field label="Entry type" wide>
                 <select value={formKind} onChange={e => { setFormKind(e.target.value); setAddingCategory(false); setCategoryName(""); setVoucherCategoryValue("") }}>
                   {(modal.type === "capital" ? ["CAPITAL_IN", "CAPITAL_RETURN", "LOAN_IN", "LOAN_REPAY", "INVESTMENT"] : [
@@ -195,7 +274,9 @@ export function WorkspaceEntryModal({ context }: {
                 </select>
               </Field><Field label="Description" wide>
                 <input name="description" required placeholder="What was this entry for?"/>
-              </Field><div className="form-note wide">For an existing invoice or vendor bill, use Record receipt / Pay to settle its balance. Direct income entries should not repeat invoiced revenue.</div></>}
+              </Field><Field label="Bill / receipt (optional)" wide>
+                <input name="attachment" type="file" accept={ATTACHMENT_ACCEPT}/>
+              </Field><div className="form-note wide">For an existing invoice or vendor bill, use Record receipt / Pay vendor to settle its balance. Direct income entries should not repeat invoiced revenue.</div></>}
  {modal.type === "document" && <><div className="wide document-section-title">
                 <span>01</span>
                 <div><strong>Document information</strong><small>Recipient, dates and tax treatment</small></div>
@@ -265,7 +346,7 @@ export function WorkspaceEntryModal({ context }: {
     value={docPartyId}
     onChange={e => chooseDocumentParty(data.parties.find((x: Row) => x.id === e.target.value))}>
                   <option value="">Select a client or vendor</option>
-                  {data.parties.map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {selectableParties("", docPartyId).map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </Field><Field label={newDocKind === "BILL" ? "Name" : "Client name"}>
                 <input value={clientInfo.name} onChange={e => setClientInfo({ ...clientInfo, name: e.target.value })}/>
@@ -361,10 +442,11 @@ export function WorkspaceEntryModal({ context }: {
                   <span className="line-serial">{i + 1}</span>
                   <div>
                     <input aria-label={"Line " + (i + 1) + " description"}
-    placeholder={newDocKind === "BILL" ? "Payment description" : "Service or item"}
+    placeholder={newDocKind === "BILL" ? "Payment description" : "Service or item — type to pick a saved one"}
     required
+    list={newDocKind === "BILL" ? undefined : "item-options"}
     value={l.description}
-    onChange={e => setDocLines(docLines.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}/>
+    onChange={e => setDocLines(docLines.map((x, j) => j === i ? (newDocKind === "BILL" ? { ...x, description: e.target.value } : withItem(x, e.target.value)) : x))}/>
                     {newDocKind !== "BILL" && <input aria-label={"Line " + (i + 1) + " HSN SAC"}
     placeholder="HSN / SAC"
     value={l.hsn}
@@ -495,29 +577,29 @@ export function WorkspaceEntryModal({ context }: {
     defaultValue={modal.document?.notes || ""}
     placeholder="Scope, payment terms or supporting notes"/>
               </Field>}<div className="form-note wide">Saved as a draft. Issuing an invoice or payment receipt posts to the ledger; quotations and proformas remain non-posting.</div></>}
- {modal.type === "payment" && <><div className="form-note wide">Receipt from a client. Vendor bills are not available yet; record vendor payments as expense vouchers.</div><Field label="Payment receipt number">
-                <input name="number" maxLength={80} placeholder="Generated automatically on save"/>
-              </Field><Field label="Allocate to document">
-                <select value={paymentDoc}
-    onChange={e => { setPaymentDoc(e.target.value); const d = data.documents.find((x: Row) => x.id === e.target.value); const p = data.parties.find((x: Row) => x.id === d?.party_id); if (p)
-      setClientInfo({
-      name: p.name || "",
-      address: p.address || "",
-      gstin: p.gstin || "",
-      contactName: p.contact_name || "",
-      phone: p.phone || ""
-    }) }}>
-                  <option value="">Unallocated client advance</option>
-                  {data.documents.filter((d: Row) => d.kind === "INVOICE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid)).map((d: Row) => <option key={d.id} value={d.id}>
-                    {d.number} · {d.party_name} · {money(moneySub(d.total, d.paid))}
-                  </option>)}
+ {modal.type === "payment" && paymentDirection === "PAYMENT" && <><div className="form-note wide">Money paid to a vendor. Allocate it to their posted bills; anything left over is kept as a vendor advance you can apply to a later bill.</div><Field label="Vendor" wide>
+                <select name="partyId" required value={payParty} onChange={e => { setPayParty(e.target.value); setAlloc({}); }}>
+                  <option value="">Choose a vendor</option>
+                  {selectableParties("VENDOR", payParty).map((p: Row) => <option key={p.id} value={p.id}>{p.name}{Number(p.payable) > 0 ? " · payable " + money(p.payable) : ""}</option>)}
                 </select>
-              </Field>{!paymentDoc && <Field label="Client">
+              </Field><Field label="Payment date">
+                <input name="date" type="date" defaultValue={today()} required/>
+              </Field><Field label="Amount paid (₹)">
+                <input name="amount" type="number" min=".01" step=".01" required value={payAmount} onChange={e => setPayAmount(e.target.value)}/>
+              </Field><Field label="Paid from">{bankSelect()}</Field><Field label="Reference / description">
+                <input name="description" required minLength={2} placeholder="UTR, cheque no. or note"/>
+              </Field>{payParty && <AllocationTable docs={openDocsFor(payParty, "PURCHASE")} values={alloc} onChange={setAlloc} amount={Number(payAmount) || 0} remainderLabel="kept as a vendor advance" noun="bills"/>}
+              <Field label="Payment proof (optional)" wide><input name="attachment" type="file" accept={ATTACHMENT_ACCEPT}/></Field></>}
+ {modal.type === "payment" && paymentDirection === "RECEIPT" && <><div className="form-note wide">Money received from a client. Allocate it to their issued invoices — one receipt can settle several.</div><Field label="Payment receipt number">
+                <input name="number" maxLength={80} placeholder="Generated automatically on save"/>
+              </Field><Field label="Client">
                 <select name="partyId"
     required
-    defaultValue=""
+    value={payParty}
     onChange={e => {
     const p = data.parties.find((x: Row) => x.id === e.target.value);
+    setPayParty(e.target.value);
+    setAlloc({});
     setClientInfo({
       name: p?.name || "",
       address: p?.address || "",
@@ -526,10 +608,10 @@ export function WorkspaceEntryModal({ context }: {
       phone: p?.phone || ""
     })
   }}>
-                  <option value="">Choose a party</option>
-                  {data.parties.map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  <option value="">Choose a client</option>
+                  {selectableParties("CLIENT", payParty).map((p: Row) => <option key={p.id} value={p.id}>{p.name}{Number(p.receivable) > 0 ? " · due " + money(p.receivable) : ""}</option>)}
                 </select>
-              </Field>}<><Field label="Client name">
+              </Field><><Field label="Client name">
                   <input value={clientInfo.name} onChange={e => setClientInfo({ ...clientInfo, name: e.target.value })}/>
                 </Field><Field label="Address" wide>
                   <textarea value={clientInfo.address}
@@ -544,15 +626,103 @@ export function WorkspaceEntryModal({ context }: {
                 </Field></><Field label="Payment date">
                 <input name="date" type="date" defaultValue={today()} required/>
               </Field><Field label="Amount (₹)">
-                <input name="amount"
-    type="number"
-    min=".01"
-    step=".01"
-    defaultValue={modal.document ? moneySub(modal.document.total, modal.document.paid) : undefined}
-    required/>
+                <input name="amount" type="number" min=".01" step=".01" required value={payAmount} onChange={e => setPayAmount(e.target.value)}/>
               </Field><Field label="Bank / cash">{bankSelect()}</Field><Field label="Reference / description" wide>
                 <input name="description" required placeholder="Bank reference or payment note"/>
-              </Field></>}
+              </Field>{payParty && <AllocationTable docs={openDocsFor(payParty, "INVOICE")} values={alloc} onChange={setAlloc} amount={Number(payAmount) || 0}
+                remainderLabel={data.company.demo ? "kept as a client advance" : "unallocated — allocate it in full (live advances are not enabled yet)"} noun="invoices"/>}</>}
+ {modal.type === "advance" && (() => {
+    const kind = paymentDirection === "PAYMENT" ? "PURCHASE" : "INVOICE";
+    const holders = data.parties.filter((p: Row) => advanceOf(p, paymentDirection) > 0 || p.id === payParty);
+    const available = advanceOf(data.parties.find((p: Row) => p.id === payParty), paymentDirection);
+    return <><div className="form-note wide">{paymentDirection === "PAYMENT"
+      ? "Settles vendor bills from money already paid in advance. No cash moves and no expense is added again."
+      : "Settles invoices from money the client already paid in advance. No cash moves and no income is added again."}</div><Field label={paymentDirection === "PAYMENT" ? "Vendor" : "Client"} wide>
+                <select name="partyId" required value={payParty} onChange={e => { setPayParty(e.target.value); setAlloc({}); }}>
+                  <option value="">Choose who paid the advance</option>
+                  {holders.map((p: Row) => <option key={p.id} value={p.id}>{p.name} · advance {money(advanceOf(p, paymentDirection))}</option>)}
+                </select>
+              </Field><Field label="Date applied"><input name="date" type="date" defaultValue={today()} required/></Field><Field label="Advance available"><input value={money(available)} disabled/></Field>
+              {payParty && <AllocationTable docs={openDocsFor(payParty, kind)} values={alloc} onChange={setAlloc} amount={available} remainderLabel="stays as advance" noun={kind === "PURCHASE" ? "bills" : "invoices"}/>}
+              {!holders.length && <div className="form-note wide">No {paymentDirection === "PAYMENT" ? "vendor" : "client"} has an unapplied advance as of the selected end date.</div>}</>;
+  })()}
+ {modal.type === "purchase" && <><div className="wide document-section-title">
+                <span>01</span>
+                <div><strong>Supplier bill</strong><small>Who billed you, their bill number and dates</small></div>
+              </div><Field label="Vendor" wide>
+                <select name="partyId" required value={docPartyId} onChange={e => {
+    const p = data.parties.find((x: Row) => x.id === e.target.value);
+    setDocPartyId(e.target.value);
+    const state = String(p?.gstin || "").slice(0, 2);
+    setPlaceOfSupply(/^\d{2}$/.test(state) ? state : data.company.state_code || "");
+  }}>
+                  <option value="">Choose a vendor</option>
+                  {selectableParties("VENDOR", docPartyId).map((p: Row) => <option key={p.id} value={p.id}>{p.name}{p.gstin ? " · " + p.gstin : ""}</option>)}
+                </select>
+              </Field><Field label="Supplier's bill number"><input name="reference" required maxLength={80} defaultValue={modal.document?.reference || ""} placeholder="As printed on their bill"/></Field>
+              <Field label="Bill date"><input name="date" type="date" required defaultValue={modal.document?.issue_date?.slice(0, 10) || today()}/></Field>
+              <Field label="Due date"><input name="dueDate" type="date" required defaultValue={modal.document?.due_date?.slice(0, 10) || localDate(30)}/></Field>
+              <Field label="Book to (expense or asset)">
+                <select name="expenseAccount" required defaultValue={modal.document?.expense_account || ""}>
+                  <option value="">Choose an account</option>
+                  <optgroup label="Expenses">{fixedAssetOrExpense.filter((a: Row) => a.kind === "EXPENSE").map((a: Row) => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>
+                  <optgroup label="Fixed assets & deposits">{fixedAssetOrExpense.filter((a: Row) => a.kind === "ASSET").map((a: Row) => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>
+                </select>
+              </Field><Field label="Project (optional)">
+                <select name="projectId" defaultValue={modal.document?.project_id || ""}>
+                  <option value="">No project</option>
+                  {data.projects.filter((p: Row) => !p.archived || p.id === modal.document?.project_id).map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </Field><div className="wide document-section-title">
+                <span>02</span>
+                <div><strong>GST on this bill</strong><small>What the supplier charged, and whether you can claim it</small></div>
+              </div><Field label="GST charged by supplier">
+                <select value={taxTreatment} onChange={e => setTaxTreatment(e.target.value)}>
+                  <option value="TAXABLE">Yes — GST bill</option>
+                  <option value="OUTSIDE_GST">No GST charged</option>
+                </select>
+              </Field>{taxTreatment === "TAXABLE" ? <><Field label="Supplier state code">
+                  <input name="placeOfSupply" value={placeOfSupply} onChange={e => setPlaceOfSupply(e.target.value)} pattern="[0-9]{2}" required placeholder="e.g. 32"/>
+                </Field><Field label="Tax split">
+                  <select value={supplyStateKnown ? (draftInterstate ? "INTER" : "INTRA") : manualSupplyMode} required disabled={supplyStateKnown} onChange={e => setManualSupplyMode(e.target.value)}>
+                    <option value="">Select tax calculation</option>
+                    <option value="INTRA">CGST + SGST</option>
+                    <option value="INTER">IGST</option>
+                  </select>
+                </Field><label className="check-field wide"><input type="checkbox" name="itcEligible" defaultChecked={modal.document ? modal.document.itc_eligible !== false : true}/> Claim input tax credit (ITC) on this bill — untick for blocked credits such as food, personal use or motor vehicles</label></>
+                : <input type="hidden" name="placeOfSupply" value={data.company.state_code || "00"}/>}
+              <div className="wide line-items">
+                <div className="document-section-title">
+                  <span>03</span>
+                  <div><strong>Bill items</strong><small>As listed on the supplier's bill</small></div>
+                </div>
+                <div className="line-labels" style={{ gridTemplateColumns: taxTreatment === "TAXABLE" ? "30px minmax(130px,3fr) .6fr .9fr .9fr .6fr 25px" : "30px minmax(130px,3fr) .6fr .9fr .9fr 25px" }}>
+                  <span>SL</span><span>Description / HSN-SAC</span><span>Qty</span><span>Rate (₹)</span><span>Amount (₹)</span>{taxTreatment === "TAXABLE" && <span>GST %</span>}<span />
+                </div>
+                {docLines.map((l, i) => <div className="line-editor" key={i} style={{ gridTemplateColumns: taxTreatment === "TAXABLE" ? "30px minmax(130px,3fr) .6fr .9fr .9fr .6fr 25px" : "30px minmax(130px,3fr) .6fr .9fr .9fr 25px" }}>
+                  <span className="line-serial">{i + 1}</span>
+                  <div>
+                    <input aria-label={"Line " + (i + 1) + " description"} required list="item-options" placeholder="Item or service" value={l.description}
+                      onChange={e => setDocLines(docLines.map((x, j) => j === i ? withItem(x, e.target.value) : x))}/>
+                    <input aria-label={"Line " + (i + 1) + " HSN SAC"} placeholder="HSN / SAC" value={l.hsn} onChange={e => setDocLines(docLines.map((x, j) => j === i ? { ...x, hsn: e.target.value } : x))}/>
+                  </div>
+                  {["quantity", "price"].map(k => <input key={k} aria-label={"Line " + (i + 1) + " " + k} type="number" step={k === "quantity" ? ".0001" : ".01"} min={k === "quantity" ? ".0001" : "0"} required value={l[k]}
+                    onChange={e => setDocLines(docLines.map((x, j) => j === i ? { ...x, [k]: e.target.value } : x))}/>)}
+                  <span className="line-amount">{money(Math.round((Number(l.quantity) || 0) * (Number(l.price) || 0) * 100) / 100)}</span>
+                  {taxTreatment === "TAXABLE" && <input aria-label={"Line " + (i + 1) + " taxRate"} type="number" step=".01" min="0" max="100" required value={l.taxRate}
+                    onChange={e => setDocLines(docLines.map((x, j) => j === i ? { ...x, taxRate: e.target.value } : x))}/>}
+                  <button type="button" className="icon-btn" aria-label="Remove line" disabled={docLines.length === 1} onClick={() => setDocLines(docLines.filter((_, j) => j !== i))}><Trash2 size={15}/></button>
+                </div>)}
+                <button className="link" type="button" onClick={() => setDocLines([...docLines, { description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }])}><Plus size={15}/>Add line item</button>
+              </div>
+              <div className="wide document-form-totals">
+                <div><span>Taxable value</span><strong>{money(draftInvoiceTotals.subtotal)}</strong></div>
+                {taxTreatment === "TAXABLE" && (draftInterstate === true ? <div><span>IGST</span><strong>{money(draftInvoiceTotals.igst)}</strong></div> : draftInterstate === false ? <><div><span>CGST</span><strong>{money(draftInvoiceTotals.cgst)}</strong></div><div><span>SGST</span><strong>{money(draftInvoiceTotals.sgst)}</strong></div></> : <div><span>GST</span><strong>Select a tax split</strong></div>)}
+                <div className="grand-total"><span>Bill total</span><strong>{money(draftInvoiceTotals.total)}</strong></div>
+              </div>
+              <Field label="Notes" wide><textarea name="notes" defaultValue={modal.document?.notes || ""} placeholder="Optional"/></Field>
+              <Field label="Scanned bill (optional)" wide><input name="attachment" type="file" accept={ATTACHMENT_ACCEPT}/></Field>
+              <div className="form-note wide">Saved as a draft. Posting it records the expense (or asset), the claimable GST as input tax credit and the amount you owe the vendor.</div></>}
  {modal.type === "budget" && <><Field label="Month">
                 <input name="month" type="month" defaultValue={data.month || from.slice(0, 7)} required/>
               </Field><Field label="Category">{catSelect()}</Field><Field label="Budget amount (₹)" wide>
@@ -638,11 +808,11 @@ export function WorkspaceEntryModal({ context }: {
           <div className="modal-actions">
             <button className="btn" type="button" disabled={busy} onClick={() => setModal(null)}>{modal.type === "cancel" ? "Keep document" : "Cancel"}</button>
             <ActionButton className="btn primary" loading={busy} loadingText="Saving…">
-              {busy ? "Saving…" : modal.type === "document" ? "Save draft" : modal.type === "import" ? "Import rows" : modal.type === "creditNote" ? "Issue credit note" : modal.type === "cancel" ? "Cancel document" : "Save entry"}
+              {busy ? "Saving…" : ["document", "purchase"].includes(modal.type) ? "Save draft" : modal.type === "import" ? "Import rows" : modal.type === "creditNote" ? "Issue credit note" : modal.type === "cancel" ? "Cancel document" : modal.type === "advance" ? "Apply advance" : modal.type === "password" ? "Change password" : ["party", "project", "item", "userEdit"].includes(modal.type) ? (modal.party || modal.project || modal.item || modal.user ? "Save changes" : "Save") : "Save entry"}
               <Check size={16}/>
             </ActionButton>
           </div>
-        </form>
+        </form></>}
       </div>
     </div>}
   </>;

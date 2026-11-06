@@ -6,7 +6,9 @@ import {
 } from "lucide-react";
 import { Badge, Empty, Field } from "../components/ui";
 import { ToastViewport, useToasts, type ToastInput } from "../components/toast";
-import { amountInWords, documentLabel, localDate, localMonthStart, voucherLabel } from "../lib/format";
+import { amountInWords, documentLabel, fileToBase64, localDate, localMonthStart, MAX_ATTACHMENT_BYTES, voucherLabel } from "../lib/format";
+import { PurchasesPage } from "../features/purchases/page";
+import { ItemsPage } from "../features/items/page";
 import { EntryTable } from "../components/entry-table";
 import { ActionButton } from "../components/action-button";
 import { DocumentPreview, Report } from "../components/financial-views";
@@ -308,8 +310,8 @@ export default function Page() {
       ? (extra.document.company_snapshot?.profile === "TAXABLE" ? "TAXABLE" : "OUTSIDE_GST")
       : extra.document?.tax_treatment || "TAXABLE";
     setTaxTreatment(selectedTaxTreatment);
-    setNewDocKind(extra.document?.kind || "INVOICE");
-    setPlaceOfSupply(extra.document?.place_of_supply || "");
+    setNewDocKind(extra.document?.kind || (type === "purchase" ? "PURCHASE" : "INVOICE"));
+    setPlaceOfSupply(extra.document?.place_of_supply || (type === "purchase" ? data?.company?.state_code || "" : ""));
     setManualSupplyMode(extra.document && (!isStateCode(data?.company?.state_code) || !isStateCode(extra.document.place_of_supply)) ? (extra.document.interstate ? "INTER" : "INTRA") : "");
     setDocNumber(type === "document" ? extra.document?.number || "" : "");
     setDocCurrency(extra.document?.currency || "INR");
@@ -383,21 +385,127 @@ export default function Page() {
     catch (e: any) { fail("Couldn't open the receipt")(e) }
   }
 
+  // Uploads one file as evidence for a document or ledger entry (validated again by the API).
+  const uploadFile = useCallback(async (entityType: string, entityId: string, file: File) => {
+    if (file.size > MAX_ATTACHMENT_BYTES) throw Error(file.name + " is larger than 4 MB.");
+    const contentType = file.type === "image/jpg" ? "image/jpeg" : file.type;
+    if (!["application/pdf", "image/png", "image/jpeg", "image/webp"].includes(contentType)) throw Error(file.name + " is not a PDF, PNG, JPEG or WebP file.");
+    return api("attachments", "POST", { entityType, entityId, fileName: file.name, contentType, data: await fileToBase64(file) });
+  }, [api]);
+
+  const downloadAttachment = useCallback(async (a: Row) => {
+    const r = await fetch("/api/attachments/" + a.id, { credentials: "same-origin" });
+    if (!r.ok) throw Error((await r.json().catch(() => ({}))).message || "Couldn't download " + a.file_name + ".");
+    const url = URL.createObjectURL(await r.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = a.file_name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, []);
+
+  // A file picked on a create form is uploaded after the record is saved; a failed upload never undoes the entry.
+  async function attachAfterSave(file: File | null, entityType: string, entityId: string | undefined, label: string) {
+    if (!file || !file.size || !entityId) return;
+    try {
+      await uploadFile(entityType, entityId, file);
+      await refresh();
+    } catch (err: any) {
+      notify({ tone: "error", title: label + " saved, but the attachment failed", description: (err?.message || "Upload failed.") + " Use the paperclip to try again." });
+    }
+  }
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (busy) return;
-    const f = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
+    const formData = new FormData(e.currentTarget);
+    const picked = formData.get("attachment");
+    const file = picked instanceof File && picked.size > 0 ? picked : null;
+    formData.delete("attachment");
+    const f = Object.fromEntries(formData) as Record<string, string>;
+    const allocations = Object.entries(f)
+      .filter(([k, v]) => k.startsWith("alloc-") && Number(v) > 0)
+      .map(([k, v]) => ({ documentId: k.slice(6), amount: (Math.round(Number(v) * 100) / 100).toFixed(2) }));
     try {
       switch (modal?.type) {
-        case "party": await perform("parties", f, "POST", { title: "Contact added", description: f.name + " is ready to use on documents and vouchers." }); break;
-        case "project": await perform("projects", { ...f, partyId: f.partyId || null }, "POST", {
-          title: "Project created",
-          description: f.name + (Number(f.budget) > 0 ? " · budget " + money(f.budget) : "") + ". Link vouchers to it to track profit."
-        }); break;
-        case "voucher": case "capital": await perform("vouchers", { ...f, kind: formKind, partyId: f.partyId || null, projectId: f.projectId || null }, "POST", (r: Row) => ({
-          title: voucherLabel(formKind) + " recorded",
-          description: [r?.number, money(f.amount), f.description].filter(Boolean).join(" · ")
-        })); break;
+        case "party": {
+          const body = { name: f.name, contactName: f.contactName || "", email: f.email || "", phone: f.phone || "", address: f.address || "", gstin: f.gstin || "", kind: f.kind };
+          if (modal.party) await perform("parties/" + modal.party.id, { ...body, archived: f.archived === "on" }, "PATCH", {
+            title: f.archived === "on" ? "Contact archived" : "Contact updated",
+            description: f.archived === "on" ? f.name + " is hidden from new entries. Its history stays." : f.name + " is updated for new documents."
+          });
+          else await perform("parties", body, "POST", { title: "Contact added", description: f.name + " is ready to use on documents and vouchers." });
+          break;
+        }
+        case "project": {
+          const body = { name: f.name, partyId: f.partyId || null, budget: f.budget || "0" };
+          if (modal.project) await perform("projects/" + modal.project.id, { ...body, archived: f.archived === "on" }, "PATCH", { title: f.archived === "on" ? "Project archived" : "Project updated", description: f.name });
+          else await perform("projects", body, "POST", {
+            title: "Project created",
+            description: f.name + (Number(f.budget) > 0 ? " · budget " + money(f.budget) : "") + ". Link vouchers to it to track profit."
+          });
+          break;
+        }
+        case "item": {
+          const body = { name: f.name, kind: f.kind, hsn: f.hsn || "", unit: f.unit || "", rate: f.rate ? (Math.round(Number(f.rate) * 100) / 100).toFixed(2) : "0", taxRate: f.taxRate || "0", description: f.description || "" };
+          if (modal.item) await perform("items/" + modal.item.id, { ...body, archived: f.archived === "on" }, "PATCH", { title: "Item updated", description: f.name });
+          else await perform("items", body, "POST", { title: "Item added", description: f.name + " can now be picked on document lines." });
+          break;
+        }
+        case "userEdit": {
+          await perform("users/" + modal.user.id, { name: f.name, role: f.role, active: f.active === "on" }, "PATCH", null);
+          if (f.newPassword) await perform("users/" + modal.user.id + "/password", { password: f.newPassword }, "POST", null);
+          notify({ title: "Team member updated", description: f.name + (f.active === "on" ? "" : " is disabled and signed out") + (f.newPassword ? " · password reset" : "") + "." });
+          setUsers(await api("users"));
+          break;
+        }
+        case "password": {
+          if (f.newPassword !== f.confirmPassword) throw Error("The new passwords don't match.");
+          await perform("auth/password", { currentPassword: f.currentPassword, newPassword: f.newPassword }, "POST", { title: "Password changed", description: "Other devices were signed out." });
+          break;
+        }
+        case "purchase": {
+          if (taxTreatment === "TAXABLE" && draftInterstate === null) throw Error("Select CGST + SGST or IGST for this bill.");
+          const payload = {
+            kind: "PURCHASE",
+            partyId: f.partyId,
+            reference: f.reference,
+            date: f.date,
+            dueDate: f.dueDate,
+            taxTreatment,
+            taxReason: taxTreatment === "TAXABLE" ? "" : "No GST charged by the supplier",
+            placeOfSupply: f.placeOfSupply,
+            ...(draftInterstate === null ? {} : { interstate: draftInterstate }),
+            expenseAccount: f.expenseAccount,
+            projectId: f.projectId || null,
+            itcEligible: f.itcEligible === "on",
+            notes: f.notes || "",
+            currency: "INR",
+            lines: docLines.map(l => ({ description: l.description, hsn: l.hsn || "", quantity: String(l.quantity), price: String(l.price), taxRate: taxTreatment === "TAXABLE" ? String(l.taxRate || 0) : "0" }))
+          };
+          const r = await perform(modal.document ? "documents/" + modal.document.id : "documents", payload, modal.document ? "PATCH" : "POST", {
+            title: modal.document ? "Vendor bill updated" : "Vendor bill saved as draft",
+            description: f.reference + " · " + money(draftInvoiceTotals.total) + ". Post it to record the payable."
+          });
+          await attachAfterSave(file, "DOCUMENT", r?.id, "Vendor bill");
+          break;
+        }
+        case "advance": {
+          if (!allocations.length) throw Error("Enter an amount against at least one " + (modal.direction === "PAYMENT" ? "bill." : "invoice."));
+          await perform("advances/apply", { direction: modal.direction === "PAYMENT" ? "PAYMENT" : "RECEIPT", partyId: f.partyId, date: f.date, allocations }, "POST", {
+            title: "Advance applied",
+            description: money(allocations.reduce((s, a) => s + Number(a.amount), 0)) + " settled from the advance. No cash moved."
+          });
+          break;
+        }
+        case "voucher": case "capital": {
+          const r = await perform("vouchers", { ...f, kind: formKind, partyId: f.partyId || null, projectId: f.projectId || null }, "POST", (r: Row) => ({
+            title: voucherLabel(formKind) + " recorded",
+            description: [r?.number, money(f.amount), f.description].filter(Boolean).join(" · ")
+          }));
+          await attachAfterSave(file, "ENTRY", r?.id, voucherLabel(formKind));
+          break;
+        }
         case "document": {
           const isReceipt = newDocKind === "BILL";
           if (!isReceipt && taxTreatment === "TAXABLE" && draftInterstate === null) throw Error("Select CGST + SGST or IGST because supplier state information is unavailable.");
@@ -425,17 +533,28 @@ export default function Page() {
           break;
         }
         case "payment": {
-          const doc = data?.documents.find((d: Row) => d.id === paymentDoc);
-          await perform("payments", {
-            ...f,
-            direction: "RECEIPT",
-            partyId: doc?.party_id || f.partyId,
-            client: clientInfo,
-            allocations: doc ? [{ documentId: doc.id, amount: f.amount }] : []
+          const receipt = modal.direction !== "PAYMENT";
+          const allocatedTotal = allocations.reduce((s, a) => s + Math.round(Number(a.amount) * 100), 0) / 100;
+          if (allocatedTotal > Number(f.amount) + 0.001) throw Error("Allocations exceed the amount " + (receipt ? "received." : "paid."));
+          const party = data?.parties.find((p: Row) => p.id === f.partyId);
+          const numbers = allocations.map(a => data?.documents.find((d: Row) => d.id === a.documentId)?.number).filter(Boolean);
+          const leftover = Math.round((Number(f.amount) - allocatedTotal) * 100) / 100;
+          const r = await perform("payments", {
+            direction: receipt ? "RECEIPT" : "PAYMENT",
+            partyId: f.partyId,
+            date: f.date,
+            amount: (Math.round(Number(f.amount) * 100) / 100).toFixed(2),
+            cashAccount: f.cashAccount,
+            description: f.description,
+            ...(receipt ? { number: f.number || undefined, client: clientInfo } : {}),
+            allocations
           }, "POST", {
-            title: "Receipt recorded",
-            description: money(f.amount) + " from " + (clientInfo.name || "the client") + (doc ? " against " + doc.number : " as an advance") + "."
+            title: receipt ? "Receipt recorded" : "Vendor payment recorded",
+            description: money(f.amount) + (receipt ? " from " : " to ") + (party?.name || (receipt ? "the client" : "the vendor"))
+              + (numbers.length ? " against " + numbers.join(", ") : "")
+              + (leftover > 0 ? (numbers.length ? "; " : " · ") + money(leftover) + " kept as an advance" : "") + "."
           });
+          await attachAfterSave(file, "ENTRY", r?.id, receipt ? "Receipt" : "Payment");
           break;
         }
         case "creditNote": {
@@ -526,6 +645,9 @@ export default function Page() {
   };
   const accounts = data?.accounts || [],
     cashAccounts = accounts.filter((a: Row) => a.is_cash);
+  // Contacts offered in pickers: active ones of the right side (clients or vendors), plus the one already chosen.
+  const selectableParties = (side: "" | "CLIENT" | "VENDOR", keep?: string) => (data?.parties || []).filter((p: Row) =>
+    p.id === keep || (!p.archived && (!side || p.kind === side || p.kind === "BOTH")));
 
   const bankSelect = (name = "cashAccount", dailyVoucher = false) =>
     <select name={name} required>
@@ -535,7 +657,7 @@ export default function Page() {
   const partySelect = (name = "partyId", required = false) =>
     <select name={name} required={required}>
       <option value="">Select a party{required ? "" : " (optional)"}</option>
-      {data?.parties.map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      {selectableParties("").map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
     </select>;
 
   const catSelect = (name = "account", kind = "EXPENSE") =>
@@ -570,7 +692,7 @@ export default function Page() {
     const parties: Row[] = data?.parties || [];
     // Owner and reimbursement categories are the contacts tagged for them (voucher_category_kind, comma separated).
     const tagged = (p: Row) => String(p.voucher_category_kind || "").split(",").includes(kind);
-    const allowed = ["INCOME", "LOAN_IN", "LOAN_REPAY"].includes(kind) ? parties : parties.filter(tagged);
+    const allowed = (["INCOME", "LOAN_IN", "LOAN_REPAY"].includes(kind) ? parties : parties.filter(tagged)).filter(p => !p.archived);
     return allowed.map((p: Row) => ({ value: p.id, label: p.name }));
   };
 
@@ -605,20 +727,22 @@ export default function Page() {
 
   const metric = data.metrics,
     active = navigation.find(n => n[0] === page),
-    outstanding = data.documents.filter((d: Row) => d.kind === "INVOICE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid));
+    outstanding = data.documents.filter((d: Row) => d.kind === "INVOICE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid)),
+    billsDue = data.documents.filter((d: Row) => d.kind === "PURCHASE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid));
   const supplyStateKnown = isStateCode(data.company.state_code) && isStateCode(placeOfSupply),
     draftInterstate = supplyStateKnown ? placeOfSupply !== data.company.state_code : manualSupplyMode === "INTER" ? true : manualSupplyMode === "INTRA" ? false : null,
     draftInvoiceTotals = invoiceTotals(docLines, taxTreatment === "TAXABLE", draftInterstate),
     draftPaymentTotal = docLines.reduce((sum, l) => sum + Math.round(Number(l.price || 0) * 100) / 100, 0),
     advanceValue = Math.min(draftInvoiceTotals.total, Math.max(0, Number(advanceAmount) || 0));
   const filteredDocs = filter(data.documents).filter((d: Row) =>
+    d.kind !== "PURCHASE" &&
     (docKind === "ALL" || d.kind === docKind) &&
     (taxTab === "ALL" || (taxTab === "GST" ? d.tax_treatment === "TAXABLE" : d.tax_treatment !== "TAXABLE")) &&
     d.issue_date >= from
   );
   const txs = filter(data.entries).filter((e: Row) =>
     page === "capital" ? ["CAPITAL_IN", "CAPITAL_RETURN", "LOAN_IN", "LOAN_REPAY", "INVESTMENT"].includes(e.kind)
-    : page === "income" ? ["INCOME", "EXPENSE", "REIMBURSEMENT", "INVOICE", "BILL", "CREDIT_NOTE"].includes(e.kind)
+    : page === "income" ? ["INCOME", "EXPENSE", "REIMBURSEMENT", "INVOICE", "BILL", "CREDIT_NOTE", "PURCHASE"].includes(e.kind)
     : true
   );
 
@@ -631,15 +755,17 @@ export default function Page() {
     paymentDoc, setPaymentDoc, accounts, from,
     docNumber, setDocNumber, docCurrency, setDocCurrency, advanceAmount, setAdvanceAmount, advanceValue,
     advanceStatus, setAdvanceStatus, clientInfo, setClientInfo, documentCompany, setDocumentCompany, docPartyId, setDocPartyId,
-    companyDocumentProfile
+    companyDocumentProfile, selectableParties, uploadFile, downloadAttachment, api, notify, refresh, canWrite, session
   };
+  const attach = (entityType: "DOCUMENT" | "ENTRY", entityId: string, title = "") => open("attachments", { entityType, entityId, title });
 
   const pageContext = {
     page, data, metric, money, short, day, pretty, palette, accounts, go, setAccountFilter,
     documentStatus, outstanding, canWrite, viewReceipt, viewDoc, open, Empty, taxTab, setTaxTab,
     docKind, setDocKind, search, setSearch, filteredDocs, perform, from, to, partyFilter, accountFilter,
     loading, busy, setError, notify, fail, report, setReport, Field, users, setUsers, api, session, setModal, EntryTable, Report,
-    Badge, today, exportCSV, exportRows, txs, filter, active, partySelect, bankSelect, catSelect
+    Badge, today, exportCSV, exportRows, txs, filter, active, partySelect, bankSelect, catSelect,
+    setPartyFilter, billsDue, attach
   };
 
   return <div className="app-shell">
@@ -649,6 +775,7 @@ export default function Page() {
       page={page}
       mobile={mobile}
       outstandingCount={outstanding.length}
+      billsDueCount={billsDue.length}
       onNavigate={go}
       onLogout={() => perform("auth/logout", {}, "POST", null, "Couldn't sign out").then(() => setSession(null)).catch(() => {})}
     />
@@ -670,6 +797,8 @@ export default function Page() {
             <p>{({
               dashboard: "A little clarity for every business decision.",
               documents: "From the first proposal to the final payment.",
+              purchases: "Supplier bills, what you owe, and the GST you can claim.",
+              items: "The services and products you sell, ready to pick on every document.",
               vouchers: "Your day-to-day entries, all in one place.",
               income: "Understand what you earn and where it goes.",
               capital: "Keep funding and investments separate from operating profit.",
@@ -686,8 +815,8 @@ export default function Page() {
             <button className="btn" onClick={() => exportRows(txs.map((e: Row) => ({ Date: e.entry_date, Number: e.number, Type: e.kind, Description: e.description, Amount: e.amount })), "account-entries-" + from + "-" + to)}>
               <Download size={16} />Export visible entries
             </button>
-            {canWrite && <button className="btn primary" onClick={() => open(page === "documents" ? "document" : page === "parties" ? "party" : page === "projects" ? "project" : page === "capital" ? "capital" : page === "budgets" ? "budget" : page === "recurring" ? "recurring" : "voucher")}>
-              <Plus size={17} />{page === "documents" ? "New document" : page === "parties" ? "Add contact" : page === "projects" ? "New project" : page === "budgets" ? "Set budget" : page === "recurring" ? "New schedule" : "New voucher"}
+            {canWrite && <button className="btn primary" onClick={() => open(page === "documents" ? "document" : page === "purchases" ? "purchase" : page === "items" ? "item" : page === "parties" ? "party" : page === "projects" ? "project" : page === "capital" ? "capital" : page === "budgets" ? "budget" : page === "recurring" ? "recurring" : "voucher")}>
+              <Plus size={17} />{page === "documents" ? "New document" : page === "purchases" ? "New vendor bill" : page === "items" ? "Add item" : page === "parties" ? "Add contact" : page === "projects" ? "New project" : page === "budgets" ? "Set budget" : page === "recurring" ? "New schedule" : "New voucher"}
             </button>}
           </div>
         </div>
@@ -712,6 +841,8 @@ export default function Page() {
         </div>
         {page === "dashboard" && <DashboardPage ctx={pageContext} />}
         <DocumentsPage ctx={pageContext} />
+        {page === "purchases" && <PurchasesPage ctx={pageContext} />}
+        {page === "items" && <ItemsPage ctx={pageContext} />}
         <LedgerActivityPages ctx={pageContext} />
         <PartiesPage ctx={pageContext} />
         <ProjectsPage ctx={pageContext} />

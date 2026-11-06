@@ -97,9 +97,10 @@ export function Report({ data, type, to, from }: {
       </div>
     </div>;
   }
-  if (type === "Ageing") {
-    const rows = data.documents.filter((d: Row) => d.kind === "INVOICE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid));
-    return <><div className="panel-note">Outstanding amounts as of {day(to)}; includes documents before the selected start date.</div><div className="table-scroll">
+  if (type === "Ageing" || type === "Payables ageing") {
+    const payables = type === "Payables ageing";
+    const rows = data.documents.filter((d: Row) => d.kind === (payables ? "PURCHASE" : "INVOICE") && d.status === "ISSUED" && Number(d.total) > Number(d.paid));
+    return <><div className="panel-note">{payables ? "Unpaid vendor bills" : "Outstanding invoices"} as of {day(to)}; includes documents before the selected start date.</div><div className="table-scroll">
         <table>
           <thead>
             <tr>
@@ -114,7 +115,7 @@ export function Report({ data, type, to, from }: {
             {rows.map((d: Row) => {
       const days = Math.floor((Date.parse(to) - Date.parse(d.due_date)) / 86400000);
       return <tr key={d.id}>
-                <td>{d.number}</td>
+                <td>{d.number}{d.reference && <small>Supplier bill {d.reference}</small>}</td>
                 <td>{d.party_name}</td>
                 <td>{day(d.due_date)}</td>
                 <td>
@@ -225,7 +226,32 @@ export function Report({ data, type, to, from }: {
             </tr>}
           </tbody>
         </table>
-      </div></>;
+      </div>
+      {(() => {
+        // Input tax from posted vendor bills in the period; bills marked ITC-blocked are shown but not counted.
+        const bills = data.documents.filter((d: Row) => d.kind === "PURCHASE" && d.status === "ISSUED" && d.tax_treatment === "TAXABLE" && d.issue_date >= from);
+        const claim = bills.filter((d: Row) => d.itc_eligible !== false);
+        const itc = claim.reduce((s: number, d: Row) => s + Math.round(Number(d.tax) * 100), 0) / 100;
+        return <>
+          <div className="report-title"><h2>Input tax credit (ITC)</h2><p>Posted vendor bills from {day(from)} to {day(to)}</p></div>
+          {bills.length ? <div className="table-scroll"><table>
+            <thead><tr><th>Supplier bill</th><th>Vendor</th><th>Date</th><th className="right">Taxable value</th><th className="right">GST</th><th>Claim</th></tr></thead>
+            <tbody>
+              {bills.map((d: Row) => <tr key={d.id}>
+                <td>{d.reference}<small>{d.number}</small></td>
+                <td>{d.party_name}</td>
+                <td className="nowrap">{day(d.issue_date)}</td>
+                <td className="right">{money(d.subtotal)}</td>
+                <td className="right">{money(d.tax)}</td>
+                <td>{d.itc_eligible !== false ? (d.interstate ? "IGST" : "CGST + SGST") : "Blocked"}</td>
+              </tr>)}
+              <tr className="total-row"><td colSpan={4}>Eligible input tax</td><td className="right">{money(itc)}</td><td /></tr>
+            </tbody>
+          </table></div> : <Empty label="No GST vendor bills in this period"/>}
+          <div className="statement-row total"><span>Output tax less eligible input tax (working figure)</span><strong>{money(sum("tax") - itc)}</strong></div>
+          <p className="fine">A working comparison only. It is not reconciled with GSTR-2B and is not a filed return or tax-payable calculation.</p>
+        </>;
+      })()}</>;
   }
   return <><div className="panel-note">Latest 100 audit events, independent of the report date filter.</div><div className="table-scroll">
       <table>

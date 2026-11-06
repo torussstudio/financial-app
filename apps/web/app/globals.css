@@ -42,3 +42,29 @@
 .payment-receipt-content>table:first-child{table-layout:fixed}.payment-receipt-content>table:first-child td:first-child,.payment-receipt-content>table:first-child th:first-child{width:56%}.payment-receipt-content>table:first-child td:last-child,.payment-receipt-content>table:first-child th:last-child{width:44%}
 .payment-receipt-preview{--receipt-left-width:42%;--receipt-amount-width:58%}.payment-receipt-preview .payment-receipt-lines th:last-child,.payment-receipt-preview .payment-receipt-lines td:last-child{width:var(--receipt-amount-width)}.payment-receipt-preview .payment-receipt-bottom{grid-template-columns:var(--receipt-left-width) var(--receipt-amount-width)}
 @media screen{.print-backdrop{background:#282828;backdrop-filter:none}.modal.print-modal{background:#282828}.modal.print-modal>.document-page.payment-receipt-preview{width:min(92vw,680px);max-height:calc(100dvh - 82px);aspect-ratio:210/297;flex:none;overflow-y:auto;margin:auto;padding:36px 3%}.payment-receipt-content{width:100%;margin:0 auto}.payment-receipt-company{margin:0 0 38px}.payment-receipt-content>table:first-child{table-layout:fixed}.payment-receipt-content>table:first-child td:first-child,.payment-receipt-content>table:first-child th:first-child{width:56%}.payment-receipt-content>table:first-child td:last-child,.payment-receipt-content>table:first-child th:last-child{width:44%}.payment-receipt-lines tbody td:last-child{text-align:center;font-weight:700}.payment-receipt-bottom{min-height:0}.payment-receipt-bottom>.payment-receipt-grid,.payment-receipt-blank{height:100%}}@media screen and (max-width:680px){.modal.print-modal>.document-page.payment-receipt-preview{width:94vw;max-height:calc(100dvh - 68px);padding:26px 3%}.payment-receipt-content{width:100%}.payment-receipt-company{margin-bottom:26px}.payment-receipt-grid{font-size:9px}.payment-receipt-grid th,.payment-receipt-grid td{padding:5px 4px}}
+
+/* Purchases, allocations, attachments, archived masters */
+.check-field{display:flex;align-items:center;gap:8px;font-size:12px;color:#5f735a;cursor:pointer;line-height:1.5}
+.check-field input{width:auto!important;min-height:0!important;accent-color:var(--green)}
+.page-toggle{margin:0 0 14px}
+.user-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.user-row small{display:block}
+.archived-row{opacity:.62}
+.over-budget{color:#b8664a;font-weight:600}
+.allocation-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:4px 0 8px;font-size:12px}
+.allocation-head strong{margin-right:auto;color:var(--ink)}
+.allocation-input{width:120px!important;min-height:34px!important;text-align:right}
+.allocation-summary{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:#5f735a;background:#f5f8f1;border:1px solid #e8efdf;border-radius:7px;padding:10px 14px;margin-top:8px}
+.allocation-summary.over{color:#a4553b;background:#fcf0e9;border-color:#f3dccd}
+.attach-btn{position:relative}
+.attach-btn span{position:absolute;top:-4px;right:-4px;min-width:15px;height:15px;border-radius:8px;background:var(--green);color:#fff;font-size:9px;line-height:15px;text-align:center;padding:0 3px}
+.attachments-panel{display:flex;flex-direction:column;gap:14px;padding:4px 0 8px}
+.attachment-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.attachment-list li{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.attachment-list li>div{flex:1;min-width:0}
+.attachment-list strong{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attachment-list small{color:var(--muted);font-size:11px}
+.attachment-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;background:var(--green-soft);color:var(--green);flex:none}
+.upload-btn{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;cursor:pointer}
+.upload-btn.disabled{opacity:.6;pointer-events:none}
+@media (max-width:680px){.allocation-input{width:96px!important}.attachment-list li{padding:9px}}

@@ -1,0 +1,232 @@
+TASK: Implement "Priority 3 — Automation" in LedgerDesk
+
+You are working in company-accounts/. It is an accounting app for ONE GST-registered Indian company.
+- Frontend: Next.js 16 (apps/web)
+- API: NestJS with raw parameterized SQL via pg/PGlite (apps/api)
+- Database: PostgreSQL
+
+Read README.md, STATUS.md and docs/Blueprint.md first. Priority 1 (vendor bills, payments, advances, masters, attachments) is done. Priority 2 (GST/TDS/returns) may also be done. Check STATUS.md and the code, and build on what exists. Do not duplicate it.
+
+==================================================
+SAFETY RULES (read before running anything)
+==================================================
+- .env points DATABASE_URL at a PostgreSQL database. Do NOT run "npm run dev", "npm run db:migrate" or anything else that connects to it. Do not edit .env.
+- The API runs with "node --watch" and applies the schema on every restart. If a server is already running on ports 3000/4000, do not touch it.
+- For manual testing, start an isolated embedded DB:
+  DEV_EMBEDDED_DB=1 DEV_EMBEDDED_DB_PATH=<temp dir> DEMO_MODE=true SEED_DEMO=true DEV_DEMO_LOGIN=1 ADMIN_EMAIL=demo@ledgerdesk.local ADMIN_PASSWORD=<random 24+ chars> API_PORT=4100
+  Run the web app against it with API_INTERNAL_URL=http://127.0.0.1:4100
+- If the folder is a git repo, work on a new branch. If not, copy the source first (excluding node_modules, .next, apps/api/.data, dist) to a backup folder outside the project.
+- Schema changes must be additive and idempotent:
+  - Use ADD COLUMN IF NOT EXISTS and CREATE TABLE IF NOT EXISTS.
+  - Guard constraint changes with DO $$ ... $$.
+  - Append a new "-- Version N" block at the end of apps/api/src/schema.sql (N = next number after the highest one in the file).
+  - Record it with INSERT INTO schema_versions ... ON CONFLICT DO NOTHING.
+  - Never drop or rewrite existing data.
+- NO REAL MESSAGES may be sent during development or tests. All sending goes through a transport interface. Tests and demo mode use a fake/outbox transport. Real transports activate only when the admin has configured credentials in environment variables AND switched sending on in Settings. Never send to an address or number found in seed data.
+- Never put secrets (SMTP passwords, API tokens, encryption keys) in the database, in logs or in API responses. Read them from environment variables only. Document new variables in .env.example with empty values.
+
+==================================================
+CONVENTIONS ALREADY IN THE CODEBASE (follow them)
+==================================================
+- Posting only through writeJournal() in apps/api/src/accounting.ts:
+  - every journal balances;
+  - money uses decimal.js server side and numeric(18,2) in SQL;
+  - posted journals, journal lines, allocations and audit events are immutable (DB triggers);
+  - corrections are made by reversal.
+- periodOpen() runs inside writeJournal(). Background jobs must also respect closed periods. Never bypass it.
+- Write endpoints:
+  - call writer() or admin(), validate with zod, run in db.tx, and call audit();
+  - money-moving endpoints are wrapped in idempotent() (Idempotency-Key header).
+- Background jobs use the same posting functions as the UI. Jobs must be idempotent: a unique key per occurrence, so a crash or restart never posts twice.
+- Where code lives:
+  - API endpoints: apps/api/src/api.ts
+  - Posting logic: apps/api/src/accounting.ts
+  - Overview payload: apps/api/src/reports.ts (getReport)
+  - Bootstrap and seed data: apps/api/src/bootstrap.ts
+  - Server start: apps/api/src/main.ts
+  - Tests: apps/api/test/*.test.ts (node:test with in-memory PGlite; follow purchases-masters.test.ts; ApiController is tested directly with req = { user: actor, headers: {} })
+  - UI state, open() and submit(): apps/web/app/page.tsx
+  - Dialogs: apps/web/components/modals/workspace-entry-modal.tsx
+  - Pages: apps/web/features/*/page.tsx
+  - Navigation: apps/web/components/layout/sidebar.tsx
+  - Styles: apps/web/app/globals.css (reuse panel, kpi-grid, form-grid, form-note, tabs, table-scroll, check-field, allocation-* classes)
+- Current bank model:
+  - bank_statement_lines has a single matched_entry_id;
+  - import is CSV pasted into a textarea with header date,reference,description,amount;
+  - matching is one-to-one with an exact amount.
+- Current recurring model:
+  - recurring_rules + recurring_occurrences;
+  - POST /recurring/:id/confirm posts immediately for a month;
+  - there is no edit/pause UI and no scheduler.
+- New dependencies:
+  - Pin exact versions that are at least a few weeks old.
+  - Prefer well-known packages (for example nodemailer for SMTP, a maintained XLSX/CSV parser).
+  - Explain each new dependency in your final report.
+
+==================================================
+FEATURES TO BUILD (in this order)
+==================================================
+
+1. BACKGROUND JOB RUNNER
+- Add an in-process scheduler in the API (or a separate apps/worker entry that reuses the same modules; pick one and justify it). It must be safe with several API instances:
+  - a jobs table: id, type, run_key UNIQUE, status, attempts, last_error, scheduled_for, started_at, finished_at;
+  - claim jobs with SELECT ... FOR UPDATE SKIP LOCKED, or pg_try_advisory_lock.
+- Schedule in the business time zone (Asia/Kolkata). Use the existing businessToday / BUSINESS_TIME_ZONE helpers in accounting.ts.
+- Enable with JOBS_ENABLED=true (env). Default off in tests. Tests call the job functions directly with a fixed "now".
+- Admin page "Automation" (Settings section or its own nav item) shows:
+  - last runs, next runs and failures;
+  - a "Run now" button per job type (admin only, audited).
+- Retry failed jobs with backoff, up to 5 attempts. Keep an error history.
+
+2. RECURRING ENTRIES: DRAFTS, EDIT, PAUSE
+- Edit and pause/resume recurring rules. Changes are audited and apply to future occurrences only.
+- Add rule fields:
+  - start month and optional end month;
+  - frequency: MONTHLY, QUARTERLY or YEARLY;
+  - optional party, project and vendor;
+  - mode: "draft for review" (default) or "auto-post".
+- Daily job, "draft for review" mode:
+  - creates an identifiable DRAFT occurrence (a pending row the user confirms; no ledger posting);
+  - unique key (rule_id, period).
+- Daily job, "auto-post" mode:
+  - posts through postVoucher on the scheduled day;
+  - skips and reports when the period is closed;
+  - never posts twice.
+- A rule can also generate a draft vendor bill (PURCHASE) or a draft invoice from a template. Drafts only — never auto-issue invoices.
+- UI:
+  - Recurring page lists due/pending occurrences with Confirm / Skip.
+  - The existing manual confirm keeps working.
+  - Reversing a posted occurrence still frees the period (existing behaviour; keep its test passing).
+
+3. IN-APP ALERTS
+- A notifications table, plus the bell icon in the header (apps/web/components/layout/header.tsx) showing:
+  - invoices overdue and due in the next 7 days;
+  - vendor bills due;
+  - recurring drafts awaiting confirmation;
+  - failed jobs (admins only);
+  - an upcoming TDS/GST due date if Priority 2 exists.
+- Each alert links to the record. Read/unread state is per user.
+- Alerts are computed by a job and de-duplicated by key.
+
+4. PAYMENT REMINDERS (email + WhatsApp)
+- Reminder rules (Settings):
+  - stages relative to due date, for example -3, 0, +7, +15 days;
+  - each stage has its own channel(s) and template.
+- Templates support these placeholders:
+  {client_name} {invoice_number} {invoice_date} {due_date} {amount_due} {company_name} {bank_details} {days_overdue}
+  - Preview the template against a real invoice before saving.
+- Per-client opt-out, preferred channel, and reminder email/phone overrides (default to the contact's email/phone).
+- Outbox and delivery history: notification_deliveries with
+  id, document_id, party_id, rule_stage, channel, recipient, subject, body, status (QUEUED/SENT/FAILED/SKIPPED), provider_message_id, error, created_at, sent_at
+  - UNIQUE(document_id, rule_stage, channel) so a stage can never send twice.
+- Daily job:
+  - queues due reminders for issued invoices with an outstanding balance;
+  - stops automatically when the invoice is paid or credited;
+  - skips opted-out clients and invalid recipients.
+- Transports behind one interface:
+  - (a) OUTBOX/fake (tests, demo, and whenever sending is off): records the message as SKIPPED or SENT to the outbox only.
+  - (b) SMTP email via nodemailer: SMTP_URL and REMINDER_FROM_EMAIL env. Optionally attach the invoice PDF only if a server-side PDF already exists; otherwise include a short summary and no attachment.
+  - (c) WhatsApp Cloud API: WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID env. Uses pre-approved template messages; make the template name configurable.
+  - (d) Zero-credential "WhatsApp click-to-chat": a button on the invoice that opens https://wa.me/<number>?text=<encoded message> in a new tab, for the user to send manually. Log it as a MANUAL delivery.
+- UI:
+  - "Send reminder now" on an invoice (shows a preview, then the user confirms);
+  - reminder history on the invoice and the client;
+  - a Settings switch "Automatic sending" (off by default; admin only; audited).
+- Phone numbers: normalise to E.164 (default +91). Validate email format. Never send to an empty or invalid recipient.
+
+5. SMART BANK RECONCILIATION
+- Statement file upload (replacing the textarea paste, but keep paste as an option):
+  - CSV and XLSX;
+  - preview the first rows, then map columns: date, description, reference, and either amount OR separate debit/credit columns, plus optional balance;
+  - choose the date format (DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, DD MMM YYYY);
+  - save mapping presets per bank account;
+  - keep the existing dedupe (account, reference, date, amount, occurrence) and an import batch record (bank_imports table: file name, rows, added, skipped, user, time).
+  - PDF statements are out of scope; say so in the UI.
+- Matching model:
+  - add a bank_matches table (bank_line_id, entry_id, amount) to support:
+    - one line to many entries (split);
+    - many lines to one entry;
+    - partial amounts that add up exactly;
+  - migrate existing matched_entry_id values into it in the schema block;
+  - keep matched_entry_id readable or replace its uses consistently;
+  - update postReversal (it currently clears matched_entry_id) so reversing an entry removes its bank_matches rows, with an audit record.
+- Match suggestions, scored and explained:
+  - exact amount;
+  - date within ±5 days;
+  - reference/UTR found in the entry description or receipt number;
+  - party name tokens in the bank description;
+  - open invoice or bill amounts for receipts/payments not yet recorded.
+  Show the top 3 suggestions with their reasons. The user confirms. NEVER auto-confirm.
+- Actions for an unmatched line, each an explicit user action that posts through existing functions (each audited):
+  - "Record receipt against invoice(s)": opens the receipt dialog prefilled.
+  - "Record vendor payment": prefilled.
+  - "Bank charges / interest": creates an expense or income voucher.
+  - "Transfer between own accounts".
+- Unmatch, with a reason (audited).
+- Reconciliation statement per bank account as of a date:
+  - balance per bank statement (from the balance column, or opening + lines);
+  - balance per ledger;
+  - unpresented payments and uncleared receipts;
+  - the difference, which must be 0 when fully reconciled.
+
+6. AUTOMATED ENCRYPTED BACKUPS + VERIFIED RESTORE
+- Backup job (daily, plus "Backup now" for admins):
+  - PostgreSQL mode: run pg_dump -Fc via a child process when PG_DUMP_PATH (or pg_dump on PATH) is available. Pass the connection string through environment variables, never on the command line where it shows in process lists.
+  - PGlite/demo mode: use PGlite's dump facility.
+  - Encrypt with AES-256-GCM, key from BACKUP_ENCRYPTION_KEY (32 bytes, base64; refuse to back up without it and show why).
+  - File header holds version, IV and auth tag; SHA-256 of the plaintext goes in a manifest.
+  - Write to BACKUP_DIR (env). Attachments live in the DB, so they are included; state this.
+- Retention: keep N daily, M weekly and K monthly backups (settings). Prune older files.
+- Backups table: file, size, sha256, created_at, status, error, verified_at.
+- Verify job (weekly, plus "Verify now"):
+  - decrypt;
+  - restore into a THROWAWAY database (PGlite temp dir, or a separate scratch database named in BACKUP_VERIFY_DATABASE_URL);
+  - check schema version, row counts and that the trial balance totals match the source at backup time (store them in the manifest);
+  - mark verified, or record the failure.
+- Restore:
+  - do NOT build a one-click "overwrite live books" button in the web UI;
+  - provide a CLI script (apps/api/src/restore.ts, plus an "npm run db:restore" script) that restores a chosen backup into an EMPTY target database, refuses a non-empty target, and requires typing the company name to confirm;
+  - document the procedure in README.md;
+  - the UI only lists backups, offers verification, and shows the CLI command to run.
+- Off-site copy is out of scope. Mention in the README that BACKUP_DIR should be a synced or off-site location.
+
+==================================================
+ACCEPTANCE CRITERIA
+==================================================
+- "npm test", "npm run typecheck" and "npm run build" pass from company-accounts/.
+- Tests cover at least:
+  - job idempotency (running the same job twice posts or sends once);
+  - closed-period skip;
+  - recurring draft vs auto-post, pause and end month;
+  - reminder stage selection, de-duplication, stop-after-payment, opt-out and placeholder rendering;
+  - the fake transport only (no network in tests);
+  - bank file parsing for CSV and XLSX, including debit/credit columns and Indian date formats;
+  - split and many-to-one matches summing exactly;
+  - unmatch;
+  - reversal removing matches;
+  - the reconciliation statement difference;
+  - backup encrypt/decrypt round trip and tamper detection (GCM auth failure);
+  - verify-restore into PGlite reproducing the trial balance;
+  - restore refusing a non-empty target.
+- Existing tests stay green. Change an existing test only when the behaviour change is intended, and put the reason in the test name.
+- The trial balance still balances after every scenario.
+- No real email or WhatsApp message is sent, and no external network call is made, during tests or demo.
+- STATUS.md is updated: move delivered items out of "Remaining work" and list what is still missing.
+- .env.example lists every new variable, with comments.
+- Final report must cover:
+  - what was built;
+  - new tables and environment variables;
+  - new dependencies and why;
+  - how to turn on email/WhatsApp sending and backups;
+  - anything skipped, and why.
+
+==================================================
+OUT OF SCOPE
+==================================================
+- Live bank feeds or account aggregator APIs.
+- PDF statement parsing.
+- SMS.
+- Payment gateway links.
+- Off-site backup upload.
+- Multi-company support.
+- Changes to authentication.

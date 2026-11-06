@@ -1,4 +1,4 @@
-import { Search, Eye, } from "lucide-react";
+import { Search, Eye, Paperclip } from "lucide-react";
 import { EntryTable } from "../../components/entry-table";
 import { ActionButton } from "../../components/action-button";
 import { Report } from "../../components/financial-views";
@@ -91,6 +91,9 @@ export function DocumentsPage({ ctx }: Props) {
                   <ActionButton className="icon-btn" title="Preview document" onClick={() => viewDoc(d.id)}>
                     <Eye size={16}/>
                   </ActionButton>
+                  <button className="icon-btn attach-btn" title="Attachments" onClick={() => ctx.attach("DOCUMENT", d.id, d.number)}>
+                    <Paperclip size={15}/>{data.attachmentCounts?.[d.id] ? <span>{data.attachmentCounts[d.id]}</span> : null}
+                  </button>
                   {canWrite && d.status === "DRAFT" && <ActionButton className="link small"
     onClick={() => api("documents/" + d.id).then((document: Row) => open("document", { document })).catch(fail("Couldn't open " + d.number + " for editing"))}>Edit</ActionButton>}
                   {canWrite && d.status === "DRAFT" && <ActionButton className="link small" loadingText="Issuing…"
@@ -106,6 +109,8 @@ export function DocumentsPage({ ctx }: Props) {
     }}>Convert</ActionButton>}
                   {canWrite && d.kind === "INVOICE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid) && <button className="link small"
     onClick={() => open("payment", { document: d })}>Record receipt</button>}
+                  {canWrite && d.kind === "INVOICE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid) && Number(data.parties.find((p: Row) => p.id === d.party_id)?.advance_received) > 0 && <button className="link small"
+    onClick={() => open("advance", { direction: "RECEIPT", partyId: d.party_id })}>Apply advance</button>}
                   {canWrite && d.kind === "INVOICE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid) && <button className="link small"
     onClick={() => open("creditNote", { document: d })}>Credit note</button>}
                   {canWrite && (d.status === "DRAFT" || (d.status === "ISSUED" && ["QUOTATION", "PROFORMA", "BILL"].includes(d.kind))) && <button className="link small"
