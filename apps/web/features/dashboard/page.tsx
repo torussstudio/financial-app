@@ -3,7 +3,7 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tool
 import { EntryTable } from "../../components/entry-table";
 import { ActionButton } from "../../components/action-button";
 import { Report } from "../../components/financial-views";
-import type { Row } from "../../lib/format";
+import { outstandingOf, type Row } from "../../lib/format";
 type Props = {
   ctx: any
 };
@@ -183,7 +183,7 @@ export function DashboardPage({ ctx }: Props) {
         {outstanding.slice(0, 3).map((d: Row) => <ActionButton className="due-row" key={d.id} onClick={() => viewDoc(d.id)}>
           <span className="letter-avatar">{d.party_name[0]}</span>
           <span><strong>{d.party_name}</strong><small>{d.number} · {documentStatus(d)}</small></span>
-          <b>{money(Number(d.total) - Number(d.paid))}</b>
+          <b>{money(outstandingOf(d))}</b>
         </ActionButton>)}
         {!outstanding.length && <Empty label="All caught up" detail="No unpaid invoices in this view."/>}
         {canWrite && <button className="btn subtle full" onClick={() => open("payment")}>Record a receipt <Plus size={15}/>

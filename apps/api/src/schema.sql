@@ -137,3 +137,61 @@ CREATE UNIQUE INDEX IF NOT EXISTS item_name ON items(lower(name));
 CREATE TABLE IF NOT EXISTS attachments(id text PRIMARY KEY,entity_type text NOT NULL CHECK(entity_type IN ('DOCUMENT','ENTRY')),entity_id text NOT NULL,file_name text NOT NULL,content_type text NOT NULL,size integer NOT NULL CHECK(size>0),data bytea NOT NULL,uploaded_by text REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS attachment_entity ON attachments(entity_type,entity_id);
 INSERT INTO schema_versions(version) VALUES(3) ON CONFLICT DO NOTHING;
+-- Version 4: GST & compliance — TDS, debit notes, reverse charge, zero-rated/export and foreign-currency posting,
+-- GSTR-1/3B working exports with filing records, e-invoice (IRN) details. Additive only; existing rows keep their values.
+ALTER TABLE company ADD COLUMN IF NOT EXISTS tan text NOT NULL DEFAULT '';
+ALTER TABLE company ADD COLUMN IF NOT EXISTS lut_number text NOT NULL DEFAULT '';
+ALTER TABLE company ADD COLUMN IF NOT EXISTS lut_valid_from date;
+ALTER TABLE company ADD COLUMN IF NOT EXISTS lut_valid_to date;
+ALTER TABLE company ADD COLUMN IF NOT EXISTS b2cl_threshold numeric(18,2) NOT NULL DEFAULT 250000 CHECK(b2cl_threshold>0);
+ALTER TABLE company ADD COLUMN IF NOT EXISTS einvoice_enabled boolean NOT NULL DEFAULT false;
+-- Reverse charge: the supplier charges no GST and the company pays it (total = taxable value owed to the supplier; tax = RCM tax).
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS reverse_charge boolean NOT NULL DEFAULT false;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS self_invoice_number text;
+CREATE UNIQUE INDEX IF NOT EXISTS self_invoice_number_unique ON documents(self_invoice_number) WHERE self_invoice_number IS NOT NULL;
+-- Zero-rated supplies: LUT (no IGST charged) or WITH_IGST (IGST charged, refund route).
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS zero_rated_type text CHECK(zero_rated_type IN ('LUT','WITH_IGST'));
+-- Foreign-currency documents: INR per unit of the document currency, fixed on issue, and the INR equivalents the ledger posts.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS exchange_rate numeric(18,6) CHECK(exchange_rate IS NULL OR exchange_rate>0);
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS subtotal_inr numeric(18,2);
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS tax_inr numeric(18,2);
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS total_inr numeric(18,2);
+-- E-invoice details pasted back from the IRP/GSP portal. Immutable once set (trigger below).
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS irn text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ack_no text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ack_date text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS signed_qr text;
+CREATE UNIQUE INDEX IF NOT EXISTS document_irn_unique ON documents(irn) WHERE irn IS NOT NULL;
+-- Foreign-currency settlements also record the amount settled in the document currency, so the foreign balance is known.
+ALTER TABLE allocations ADD COLUMN IF NOT EXISTS foreign_amount numeric(18,2) CHECK(foreign_amount IS NULL OR foreign_amount<>0);
+-- TDS is stored as a jsonb column on the journal entry rather than a separate tds_deductions table: it is written in the same
+-- INSERT as the entry, so the existing immutable_entries trigger already protects it, a reversal finds it through reversal_of,
+-- and the ledger lines on 1250/2400 remain the single source of truth for amounts. Shapes:
+--   {"direction":"RECEIVABLE","amount":"…"}                                   client deducted TDS on a receipt
+--   {"direction":"PAYABLE","section":"194J","rate":"10","amount":"…"}          we deducted TDS on a vendor payment
+--   {"direction":"DEPOSIT","section":"194J","period":"2026-12","challan":"…","amount":"…"}   TDS deposited to government
+ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS tds jsonb;
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='documents_kind_valid' AND pg_get_constraintdef(oid) LIKE '%SALES_DEBIT_NOTE%') THEN
+  ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_kind_valid;
+  ALTER TABLE documents ADD CONSTRAINT documents_kind_valid CHECK(kind IN ('QUOTATION','PROFORMA','INVOICE','BILL','CREDIT_NOTE','PURCHASE','DEBIT_NOTE','SALES_DEBIT_NOTE'));
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='documents_tax_treatment_valid') THEN
+  ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_tax_treatment_check;
+  ALTER TABLE documents ADD CONSTRAINT documents_tax_treatment_valid CHECK(tax_treatment IN ('TAXABLE','NIL_RATED','EXEMPT','OUTSIDE_GST','ZERO_RATED'));
+ END IF;
+END $$;
+CREATE OR REPLACE FUNCTION immutable_einvoice_details() RETURNS trigger AS $$ BEGIN
+ IF (OLD.irn IS NOT NULL AND NEW.irn IS DISTINCT FROM OLD.irn) OR (OLD.ack_no IS NOT NULL AND NEW.ack_no IS DISTINCT FROM OLD.ack_no)
+  OR (OLD.ack_date IS NOT NULL AND NEW.ack_date IS DISTINCT FROM OLD.ack_date) OR (OLD.signed_qr IS NOT NULL AND NEW.signed_qr IS DISTINCT FROM OLD.signed_qr) THEN
+  RAISE EXCEPTION 'Recorded e-invoice details are immutable';
+ END IF;
+ RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS immutable_einvoice ON documents;
+CREATE TRIGGER immutable_einvoice BEFORE UPDATE ON documents FOR EACH ROW EXECUTE FUNCTION immutable_einvoice_details();
+-- Returns marked as filed on the GST portal (recorded by hand; nothing is filed from here). Append-only.
+CREATE TABLE IF NOT EXISTS gst_filings(id text PRIMARY KEY,period text NOT NULL CHECK(period ~ '^(0[1-9]|1[0-2])[0-9]{4}$'),return_type text NOT NULL CHECK(return_type IN ('GSTR1','GSTR3B')),arn text NOT NULL,filed_on date NOT NULL,filed_by text REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(period,return_type));
+DROP TRIGGER IF EXISTS immutable_gst_filings ON gst_filings;
+CREATE TRIGGER immutable_gst_filings BEFORE UPDATE OR DELETE ON gst_filings FOR EACH ROW EXECUTE FUNCTION immutable_financial_record();
+INSERT INTO schema_versions(version) VALUES(4) ON CONFLICT DO NOTHING;

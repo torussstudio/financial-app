@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { Badge, Empty, Field } from "../components/ui";
 import { ToastViewport, useToasts, type ToastInput } from "../components/toast";
-import { amountInWords, documentLabel, fileToBase64, localDate, localMonthStart, MAX_ATTACHMENT_BYTES, voucherLabel } from "../lib/format";
+import { amountInWords, documentLabel, fileToBase64, gstCharged, localDate, localMonthStart, MAX_ATTACHMENT_BYTES, outstandingOf, RECEIVABLE_KINDS, voucherLabel } from "../lib/format";
 import { PurchasesPage } from "../features/purchases/page";
 import { ItemsPage } from "../features/items/page";
 import { EntryTable } from "../components/entry-table";
@@ -48,6 +48,18 @@ const day = (s: string) =>
   new Date(s.slice(0, 10) + "T12:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
 const palette = ["#26756b", "#77a99f", "#accdc4", "#d9b97d", "#e7dcc6"];
+
+function downloadFile(content: string, name: string, type: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+// "YYYY-MM-DD" → the GST return period "MMYYYY" it falls in.
+const returnPeriodOf = (date: string) => String(date || "").slice(5, 7) + String(date || "").slice(0, 4);
 
 function exportCSV(rows: Row[], name: string) {
   if (!rows.length) return;
@@ -124,6 +136,11 @@ function invoiceTotals(lines: Row[], taxable: boolean, interstate: boolean | nul
 }
 
 const isStateCode = (value: any) => /^\d{2}$/.test(String(value || ""));
+const cents2 = (v: any) => Math.round(Number(v || 0) * 100) / 100;
+// The API returns non-blocking warnings (e.g. an IRN still to record); show them in the success toast.
+const withWarnings = (r: Row, notice: ToastInput): ToastInput => r?.warnings?.length
+  ? { ...notice, tone: "warning", description: [notice.description, ...r.warnings].filter(Boolean).join(" ") }
+  : notice;
 
 const companyDocumentProfile = (company: Row, taxTreatment: string): Row => {
   if (taxTreatment !== "OUTSIDE_GST") return { ...company };
@@ -180,7 +197,10 @@ export default function Page() {
     [taxTreatment, setTaxTreatment] = useState("TAXABLE"),
     [newDocKind, setNewDocKind] = useState("INVOICE"),
     [placeOfSupply, setPlaceOfSupply] = useState(""),
-    [manualSupplyMode, setManualSupplyMode] = useState("");
+    [manualSupplyMode, setManualSupplyMode] = useState(""),
+    // Zero-rated sub-type (LUT / WITH_IGST) and, on vendor bills, reverse charge.
+    [zeroRatedType, setZeroRatedType] = useState("LUT"),
+    [reverseCharge, setReverseCharge] = useState(false);
   const [docNumber, setDocNumber] = useState(""),
     [docCurrency, setDocCurrency] = useState("INR"),
     [advanceAmount, setAdvanceAmount] = useState("0"),
@@ -199,12 +219,13 @@ export default function Page() {
 
   useEffect(() => {
     if (modal?.type !== "document") return;
-    const interstate = isStateCode(data?.company?.state_code) && isStateCode(placeOfSupply)
+    const interstate = taxTreatment === "ZERO_RATED" ? true
+      : isStateCode(data?.company?.state_code) && isStateCode(placeOfSupply)
       ? placeOfSupply !== data?.company?.state_code
       : manualSupplyMode === "INTER" ? true
       : manualSupplyMode === "INTRA" ? false
       : null;
-    const total = invoiceTotals(docLines, taxTreatment === "TAXABLE", interstate).total,
+    const total = invoiceTotals(docLines, gstCharged(taxTreatment, zeroRatedType), interstate).total,
       raw = Number(advanceAmount) || 0;
     if (raw > total) {
       setAdvanceAmount(String(total));
@@ -213,7 +234,7 @@ export default function Page() {
     }
     const next = raw <= 0 ? "NOT_RECEIVED" : raw >= total ? "FULLY_RECEIVED" : "PARTIALLY_RECEIVED";
     if (advanceStatus !== next) setAdvanceStatus(next);
-  }, [modal?.type, docLines, taxTreatment, placeOfSupply, manualSupplyMode, data?.company?.state_code, advanceAmount, advanceStatus]);
+  }, [modal?.type, docLines, taxTreatment, zeroRatedType, placeOfSupply, manualSupplyMode, data?.company?.state_code, advanceAmount, advanceStatus]);
 
   const api = useCallback(async (path: string, method = "GET", body?: unknown) => {
     const requestId = method + ":" + path + ":" + JSON.stringify(body);
@@ -302,7 +323,7 @@ export default function Page() {
 
   function open(type: string, extra: Row = {}) {
     setError("");
-    setFormKind(type === "capital" ? "CAPITAL_IN" : "EXPENSE");
+    setFormKind(type === "capital" ? "CAPITAL_IN" : extra.tdsDeposit ? "TDS_DEPOSIT" : "EXPENSE");
     setPaymentDoc(extra.document?.id || "");
     setDocLines([{ description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }]);
     // Payment receipts are always saved as non-GST; the company profile they were made under lives on their company snapshot.
@@ -310,6 +331,8 @@ export default function Page() {
       ? (extra.document.company_snapshot?.profile === "TAXABLE" ? "TAXABLE" : "OUTSIDE_GST")
       : extra.document?.tax_treatment || "TAXABLE";
     setTaxTreatment(selectedTaxTreatment);
+    setZeroRatedType(extra.document?.zero_rated_type || "LUT");
+    setReverseCharge(Boolean(extra.document?.reverse_charge));
     setNewDocKind(extra.document?.kind || (type === "purchase" ? "PURCHASE" : "INVOICE"));
     setPlaceOfSupply(extra.document?.place_of_supply || (type === "purchase" ? data?.company?.state_code || "" : ""));
     setManualSupplyMode(extra.document && (!isStateCode(data?.company?.state_code) || !isStateCode(extra.document.place_of_supply)) ? (extra.document.interstate ? "INTER" : "INTRA") : "");
@@ -329,9 +352,23 @@ export default function Page() {
         phone: selected?.phone || extra.document?.client_snapshot?.phone || ""
       })
     })();
-    if (extra.document?.lines)
+    // A sales debit note starts with a fresh line at the invoice's usual rate; everything else edits the document's own lines.
+    if (extra.document?.lines && type !== "salesDebitNote")
       setDocLines(extra.document.lines.map((l: Row) => ({ ...l, price: String(l.price), quantity: String(l.quantity), taxRate: String(l.taxRate), hsn: l.hsn || "" })));
+    else if (type === "salesDebitNote")
+      setDocLines([{ description: "", quantity: "1", price: "", taxRate: String(extra.document?.lines?.[0]?.taxRate ?? "18"), hsn: extra.document?.lines?.[0]?.hsn || "" }]);
     setModal({ type, ...extra });
+  }
+
+  // A GST return recorded as filed for the entry's month: the change will need an amendment on the portal, so ask first.
+  function confirmFiled(date: string) {
+    const period = returnPeriodOf(date);
+    const filed = (data?.gstFilings || []).filter((g: Row) => g.period === period);
+    if (!filed.length) return true;
+    return window.confirm(
+      filed.map((g: Row) => (g.return_type === "GSTR1" ? "GSTR-1" : "GSTR-3B") + " for " + period + " is recorded as filed (ARN " + g.arn + ").").join(" ")
+      + " This entry is dated in that month and will need an amendment in a later return. Continue?"
+    );
   }
 
   type Notice = string | ToastInput | null;
@@ -423,10 +460,17 @@ export default function Page() {
     const file = picked instanceof File && picked.size > 0 ? picked : null;
     formData.delete("attachment");
     const f = Object.fromEntries(formData) as Record<string, string>;
-    const allocations = Object.entries(f)
+    const allocations: Row[] = Object.entries(f)
       .filter(([k, v]) => k.startsWith("alloc-") && Number(v) > 0)
       .map(([k, v]) => ({ documentId: k.slice(6), amount: (Math.round(Number(v) * 100) / 100).toFixed(2) }));
+    // Foreign-currency invoices are settled in their own currency ("falloc-<id>"); the API works out the INR they clear.
+    const foreignAllocations = Object.entries(f)
+      .filter(([k, v]) => k.startsWith("falloc-") && Number(v) > 0)
+      .map(([k, v]) => ({ documentId: k.slice(7), foreignAmount: (Math.round(Number(v) * 100) / 100).toFixed(2) }));
     try {
+      // Anything dated in a month whose GST return is recorded as filed needs a deliberate yes (amendments follow on the portal).
+      const dated = f.date || (modal?.type === "issue" ? modal.document?.issue_date : "");
+      if (dated && !confirmFiled(dated)) return;
       switch (modal?.type) {
         case "party": {
           const body = { name: f.name, contactName: f.contactName || "", email: f.email || "", phone: f.phone || "", address: f.address || "", gstin: f.gstin || "", kind: f.kind };
@@ -479,13 +523,14 @@ export default function Page() {
             expenseAccount: f.expenseAccount,
             projectId: f.projectId || null,
             itcEligible: f.itcEligible === "on",
+            reverseCharge: taxTreatment === "TAXABLE" && reverseCharge,
             notes: f.notes || "",
             currency: "INR",
             lines: docLines.map(l => ({ description: l.description, hsn: l.hsn || "", quantity: String(l.quantity), price: String(l.price), taxRate: taxTreatment === "TAXABLE" ? String(l.taxRate || 0) : "0" }))
           };
           const r = await perform(modal.document ? "documents/" + modal.document.id : "documents", payload, modal.document ? "PATCH" : "POST", {
             title: modal.document ? "Vendor bill updated" : "Vendor bill saved as draft",
-            description: f.reference + " · " + money(draftInvoiceTotals.total) + ". Post it to record the payable."
+            description: f.reference + " · " + money(payload.reverseCharge ? draftInvoiceTotals.subtotal : draftInvoiceTotals.total) + (payload.reverseCharge ? " payable to the supplier; " + money(draftInvoiceTotals.tax) + " GST under reverse charge" : "") + ". Post it to record the payable."
           });
           await attachAfterSave(file, "DOCUMENT", r?.id, "Vendor bill");
           break;
@@ -499,6 +544,14 @@ export default function Page() {
           break;
         }
         case "voucher": case "capital": {
+          if (formKind === "TDS_DEPOSIT") {
+            const r = await perform("tds/deposit", {
+              date: f.date, cashAccount: f.cashAccount, amount: (Math.round(Number(f.amount) * 100) / 100).toFixed(2),
+              section: f.section, period: f.period, challan: f.challan, ...(f.description ? { description: f.description } : {})
+            }, "POST", (r: Row) => ({ title: "TDS deposit recorded", description: [r?.number, money(f.amount), f.section + " · " + f.period, "challan " + f.challan].filter(Boolean).join(" · ") }));
+            await attachAfterSave(file, "ENTRY", r?.id, "TDS deposit");
+            break;
+          }
           const r = await perform("vouchers", { ...f, kind: formKind, partyId: f.partyId || null, projectId: f.projectId || null }, "POST", (r: Row) => ({
             title: voucherLabel(formKind) + " recorded",
             description: [r?.number, money(f.amount), f.description].filter(Boolean).join(" · ")
@@ -514,6 +567,7 @@ export default function Page() {
             kind: newDocKind,
             number: docNumber || undefined,
             taxTreatment: isReceipt ? "OUTSIDE_GST" : taxTreatment,
+            ...(!isReceipt && taxTreatment === "ZERO_RATED" ? { zeroRatedType } : {}),
             ...(draftInterstate === null ? {} : { interstate: draftInterstate }),
             projectId: f.projectId || null,
             currency: docCurrency,
@@ -534,24 +588,32 @@ export default function Page() {
         }
         case "payment": {
           const receipt = modal.direction !== "PAYMENT";
-          const allocatedTotal = allocations.reduce((s, a) => s + Math.round(Number(a.amount) * 100), 0) / 100;
-          if (allocatedTotal > Number(f.amount) + 0.001) throw Error("Allocations exceed the amount " + (receipt ? "received." : "paid."));
+          const cents = (v: any) => Math.round(Number(v || 0) * 100);
+          // TDS withheld (by the client on a receipt, by us on a payment) settles the documents together with the money.
+          const tds = cents(f.tdsAmount) / 100;
+          if (tds > 0 && !allocations.length) throw Error("TDS can only be recorded against an allocated " + (receipt ? "invoice." : "bill."));
+          if (tds > 0 && foreignAllocations.length) throw Error("TDS on foreign-currency invoices is not supported.");
+          if (!receipt && tds > 0 && !f.tdsSection) throw Error("Choose the TDS section.");
+          const allocatedTotal = allocations.reduce((s, a) => s + cents(a.amount), 0) / 100;
+          if (!foreignAllocations.length && allocatedTotal > (cents(f.amount) + cents(tds)) / 100 + 0.001) throw Error("Allocations exceed the amount " + (receipt ? "received" : "paid") + (tds > 0 ? " plus TDS." : "."));
           const party = data?.parties.find((p: Row) => p.id === f.partyId);
-          const numbers = allocations.map(a => data?.documents.find((d: Row) => d.id === a.documentId)?.number).filter(Boolean);
-          const leftover = Math.round((Number(f.amount) - allocatedTotal) * 100) / 100;
+          const numbers = [...allocations, ...foreignAllocations].map(a => data?.documents.find((d: Row) => d.id === a.documentId)?.number).filter(Boolean);
+          const leftover = foreignAllocations.length ? 0 : (cents(f.amount) + cents(tds) - cents(allocatedTotal)) / 100;
           const r = await perform("payments", {
             direction: receipt ? "RECEIPT" : "PAYMENT",
             partyId: f.partyId,
             date: f.date,
-            amount: (Math.round(Number(f.amount) * 100) / 100).toFixed(2),
+            amount: (cents(f.amount) / 100).toFixed(2),
             cashAccount: f.cashAccount,
             description: f.description,
             ...(receipt ? { number: f.number || undefined, client: clientInfo } : {}),
-            allocations
+            ...(tds > 0 ? receipt ? { tdsAmount: tds.toFixed(2) } : { tds: { section: f.tdsSection, rate: String(Number(f.tdsRate || 0)), amount: tds.toFixed(2) } } : {}),
+            allocations: [...allocations, ...foreignAllocations]
           }, "POST", {
             title: receipt ? "Receipt recorded" : "Vendor payment recorded",
             description: money(f.amount) + (receipt ? " from " : " to ") + (party?.name || (receipt ? "the client" : "the vendor"))
               + (numbers.length ? " against " + numbers.join(", ") : "")
+              + (tds > 0 ? " · TDS " + money(tds) : "")
               + (leftover > 0 ? (numbers.length ? "; " : " · ") + money(leftover) + " kept as an advance" : "") + "."
           });
           await attachAfterSave(file, "ENTRY", r?.id, receipt ? "Receipt" : "Payment");
@@ -568,12 +630,55 @@ export default function Page() {
           }));
           break;
         }
+        case "debitNote": {
+          const lines = (modal.document.lines as Row[])
+            .map((_, i) => ({ line: i, quantity: String(f["qty-" + i] || "0").trim() }))
+            .filter(l => Number(l.quantity) > 0);
+          if (!lines.length) throw Error("Enter a quantity to debit on at least one line.");
+          await perform("documents/" + modal.document.id + "/debit-note", { date: f.date, reason: f.reason, lines }, "POST", (r: Row) => ({
+            title: "Debit note issued",
+            description: [r?.number, "against " + (modal.document.reference || modal.document.number)].filter(Boolean).join(" · ") + ". The bill balance, its cost and the input tax claimed are reduced."
+          }));
+          break;
+        }
+        case "salesDebitNote": {
+          const lines = docLines.map(l => ({ description: l.description, hsn: l.hsn || "", quantity: String(l.quantity), price: (cents2(l.price)).toFixed(2), taxRate: String(l.taxRate || 0) }));
+          await perform("documents/" + modal.document.id + "/sales-debit-note", { date: f.date, dueDate: f.dueDate || undefined, reason: f.reason, lines }, "POST", (r: Row) => ({
+            title: "Debit note issued",
+            description: [r?.number, "against " + modal.document.number].filter(Boolean).join(" · ") + ". Record a receipt against it like an invoice."
+          }));
+          break;
+        }
+        case "issue": {
+          const d = modal.document;
+          await perform("documents/" + d.id + "/issue", f.exchangeRate ? { exchangeRate: f.exchangeRate } : {}, "POST", (r: Row) => withWarnings(r, {
+            title: documentLabel(d.kind) + " issued",
+            description: (r?.number || d.number) + (f.exchangeRate ? " · posted in INR at " + f.exchangeRate + " per " + d.currency + "." : " · posted to receivables and revenue.")
+          }), "Couldn't issue " + d.number);
+          break;
+        }
+        case "irn": {
+          await perform("documents/" + modal.document.id + "/irn", { irn: f.irn, ackNo: f.ackNo, ackDate: f.ackDate, signedQr: f.signedQr }, "POST", {
+            title: "E-invoice details recorded", description: modal.document.number + " now prints its IRN and signed QR code. They can't be changed."
+          });
+          break;
+        }
+        case "gstFiling": {
+          await perform("gst-filings", { period: f.period, returnType: f.returnType, arn: f.arn, filedOn: f.filedOn, lockPeriod: f.lockPeriod === "on" }, "POST", {
+            title: (f.returnType === "GSTR1" ? "GSTR-1" : "GSTR-3B") + " filed for " + f.period,
+            description: "ARN " + f.arn.toUpperCase() + (f.lockPeriod === "on" ? " · the month is now locked for postings." : " recorded.")
+          });
+          break;
+        }
         case "cancel": {
           const d = modal.document, postedReceipt = d.kind === "BILL" && d.status === "ISSUED";
+          const postedNote = ["DEBIT_NOTE", "SALES_DEBIT_NOTE", "PURCHASE"].includes(d.kind) && d.status === "ISSUED";
           await perform("documents/" + d.id + "/cancel", { date: f.date || today(), reason: f.reason }, "POST", {
             title: documentLabel(d.kind) + " cancelled",
             description: postedReceipt
               ? d.number + " was reversed in cash/bank and income. The original stays in the audit trail."
+              : postedNote
+              ? d.number + " was reversed in the ledger" + (d.kind === "DEBIT_NOTE" ? " and the bill it reduced is outstanding again" : "") + ". The original stays in the audit trail."
               : d.number + " is kept for the record. Nothing was posted to the ledger."
           });
           break;
@@ -699,10 +804,10 @@ export default function Page() {
   function documentStatus(d: Row) {
     if (d.status === "DRAFT") return "Draft";
     if (d.status === "CANCELLED") return "Cancelled";
-    if (["QUOTATION", "PROFORMA", "CREDIT_NOTE"].includes(d.kind)) return "Issued";
+    if (["QUOTATION", "PROFORMA", "CREDIT_NOTE", "DEBIT_NOTE"].includes(d.kind)) return "Issued";
     if (d.kind === "BILL") return "Received";
-    if (Number(d.credited) > 0 && Number(d.credited) >= Number(d.total)) return "Credited";
-    if (Number(d.paid) >= Number(d.total)) return "Paid";
+    if (Number(d.credited) > 0 && outstandingOf({ ...d, paid: d.credited }) <= 0) return "Credited";
+    if (outstandingOf(d) <= 0) return "Paid";
     if (d.due_date < to) return "Overdue";
     return Number(d.paid) > 0 ? "Part paid" : "Unpaid";
   }
@@ -727,24 +832,36 @@ export default function Page() {
 
   const metric = data.metrics,
     active = navigation.find(n => n[0] === page),
-    outstanding = data.documents.filter((d: Row) => d.kind === "INVOICE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid)),
-    billsDue = data.documents.filter((d: Row) => d.kind === "PURCHASE" && d.status === "ISSUED" && Number(d.total) > Number(d.paid));
+    outstanding = data.documents.filter((d: Row) => RECEIVABLE_KINDS.includes(d.kind) && d.status === "ISSUED" && outstandingOf(d) > 0),
+    billsDue = data.documents.filter((d: Row) => d.kind === "PURCHASE" && d.status === "ISSUED" && outstandingOf(d) > 0);
   const supplyStateKnown = isStateCode(data.company.state_code) && isStateCode(placeOfSupply),
-    draftInterstate = supplyStateKnown ? placeOfSupply !== data.company.state_code : manualSupplyMode === "INTER" ? true : manualSupplyMode === "INTRA" ? false : null,
-    draftInvoiceTotals = invoiceTotals(docLines, taxTreatment === "TAXABLE", draftInterstate),
+    // Exports and SEZ supplies are inter-state (IGST) whatever the place of supply.
+    draftInterstate = taxTreatment === "ZERO_RATED" && modal?.type === "document" ? true
+      : supplyStateKnown ? placeOfSupply !== data.company.state_code : manualSupplyMode === "INTER" ? true : manualSupplyMode === "INTRA" ? false : null,
+    draftInvoiceTotals = invoiceTotals(docLines, modal?.type === "document" ? gstCharged(taxTreatment, zeroRatedType) : taxTreatment === "TAXABLE", draftInterstate),
     draftPaymentTotal = docLines.reduce((sum, l) => sum + Math.round(Number(l.price || 0) * 100) / 100, 0),
     advanceValue = Math.min(draftInvoiceTotals.total, Math.max(0, Number(advanceAmount) || 0));
+  // Vendor bills and purchase debit notes live under Purchases & bills. Zero-rated is its own treatment, never "GST" or "non-GST".
   const filteredDocs = filter(data.documents).filter((d: Row) =>
-    d.kind !== "PURCHASE" &&
+    !["PURCHASE", "DEBIT_NOTE"].includes(d.kind) &&
     (docKind === "ALL" || d.kind === docKind) &&
-    (taxTab === "ALL" || (taxTab === "GST" ? d.tax_treatment === "TAXABLE" : d.tax_treatment !== "TAXABLE")) &&
+    (taxTab === "ALL" || (taxTab === "GST" ? d.tax_treatment === "TAXABLE" : taxTab === "ZERO_RATED" ? d.tax_treatment === "ZERO_RATED" : !["TAXABLE", "ZERO_RATED"].includes(d.tax_treatment))) &&
     d.issue_date >= from
   );
   const txs = filter(data.entries).filter((e: Row) =>
     page === "capital" ? ["CAPITAL_IN", "CAPITAL_RETURN", "LOAN_IN", "LOAN_REPAY", "INVESTMENT"].includes(e.kind)
-    : page === "income" ? ["INCOME", "EXPENSE", "REIMBURSEMENT", "INVOICE", "BILL", "CREDIT_NOTE", "PURCHASE"].includes(e.kind)
+    : page === "income" ? ["INCOME", "EXPENSE", "REIMBURSEMENT", "INVOICE", "BILL", "CREDIT_NOTE", "PURCHASE", "DEBIT_NOTE", "SALES_DEBIT_NOTE"].includes(e.kind)
     : true
   );
+  async function downloadEinvoice(d: Row) {
+    try {
+      const r = await api("documents/" + d.id + "/einvoice");
+      downloadFile(JSON.stringify(r.json, null, 2), "einvoice-" + d.number.replace(/[^A-Za-z0-9-]+/g, "-") + ".json", "application/json");
+      notify(r.issues.length
+        ? { tone: "warning", title: "E-invoice JSON downloaded — check before upload", description: r.issues.join(" ") + " " + r.note + "." }
+        : { title: "E-invoice JSON downloaded", description: "Upload it on the IRP or through your GSP, then record the IRN here. " + r.note + "." });
+    } catch (e: any) { fail("Couldn't prepare the e-invoice JSON")(e) }
+  }
 
   const entryModalContext = {
     modal, setModal, modalRef, busy, error, submit, Field, bankSelect, partySelect, catSelect,
@@ -755,7 +872,8 @@ export default function Page() {
     paymentDoc, setPaymentDoc, accounts, from,
     docNumber, setDocNumber, docCurrency, setDocCurrency, advanceAmount, setAdvanceAmount, advanceValue,
     advanceStatus, setAdvanceStatus, clientInfo, setClientInfo, documentCompany, setDocumentCompany, docPartyId, setDocPartyId,
-    companyDocumentProfile, selectableParties, uploadFile, downloadAttachment, api, notify, refresh, canWrite, session
+    companyDocumentProfile, selectableParties, uploadFile, downloadAttachment, api, notify, refresh, canWrite, session,
+    zeroRatedType, setZeroRatedType, reverseCharge, setReverseCharge
   };
   const attach = (entityType: "DOCUMENT" | "ENTRY", entityId: string, title = "") => open("attachments", { entityType, entityId, title });
 
@@ -765,7 +883,7 @@ export default function Page() {
     docKind, setDocKind, search, setSearch, filteredDocs, perform, from, to, partyFilter, accountFilter,
     loading, busy, setError, notify, fail, report, setReport, Field, users, setUsers, api, session, setModal, EntryTable, Report,
     Badge, today, exportCSV, exportRows, txs, filter, active, partySelect, bankSelect, catSelect,
-    setPartyFilter, billsDue, attach
+    setPartyFilter, billsDue, attach, confirmFiled, downloadEinvoice, downloadFile, withWarnings
   };
 
   return <div className="app-shell">

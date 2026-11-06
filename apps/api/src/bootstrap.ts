@@ -10,6 +10,7 @@ const accounts = [
   ["1200", "Input CGST", "ASSET", false],
   ["1210", "Input SGST", "ASSET", false],
   ["1220", "Input IGST", "ASSET", false],
+  ["1250", "TDS receivable", "ASSET", false],
   ["1300", "Vendor advances", "ASSET", false],
   ["1400", "Investments", "ASSET", false],
   ["1410", "FD", "ASSET", false],
@@ -23,11 +24,16 @@ const accounts = [
   ["2100", "Output CGST", "LIABILITY", false],
   ["2110", "Output SGST", "LIABILITY", false],
   ["2120", "Output IGST", "LIABILITY", false],
+  ["2130", "RCM CGST payable", "LIABILITY", false],
+  ["2140", "RCM SGST payable", "LIABILITY", false],
+  ["2150", "RCM IGST payable", "LIABILITY", false],
   ["2200", "Loans payable", "LIABILITY", false],
   ["2300", "Client advances", "LIABILITY", false],
+  ["2400", "TDS payable", "LIABILITY", false],
   ["3000", "Owner capital", "EQUITY", false],
   ["4000", "Service revenue", "INCOME", false],
   ["4100", "Other income", "INCOME", false],
+  ["4200", "Foreign exchange gain", "INCOME", false],
   ["5100", "Rent", "EXPENSE", false],
   ["5200", "Software & subscriptions", "EXPENSE", false],
   ["5300", "Professional fees", "EXPENSE", false],
@@ -39,8 +45,12 @@ const accounts = [
   ["5630", "Watercan", "EXPENSE", false],
   ["5640", "Stationary", "EXPENSE", false],
   ["5650", "Travelling expense", "EXPENSE", false],
-  ["5660", "Salaries", "EXPENSE", false]
+  ["5660", "Salaries", "EXPENSE", false],
+  ["5700", "Foreign exchange loss", "EXPENSE", false]
 ] as const;
+// Codes added in schema version 4. ON CONFLICT DO NOTHING would silently keep a different account already using one of
+// them, and postings would then land on the wrong account, so startup stops instead.
+const COMPLIANCE_CODES = ["1250", "2130", "2140", "2150", "2400", "4200", "5700"];
 export async function bootstrap(
   db: Database,
   config: {
@@ -59,7 +69,11 @@ export async function bootstrap(
     await q.query(
       "INSERT INTO accounts(code,name,kind,is_cash) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
       [...a]
-    ); if (!(await one(q, "SELECT id FROM users LIMIT 1")))
+    ); for (const code of COMPLIANCE_CODES) {
+      const expected = accounts.find(a => a[0] === code)!, found = await one(q, "SELECT kind,is_cash FROM accounts WHERE code=$1", [code]);
+      if (found.kind !== expected[2] || found.is_cash)
+        throw new Error("Account " + code + " already exists as a different account type; it is reserved for " + expected[1] + ". Resolve this before starting.");
+    } if (!(await one(q, "SELECT id FROM users LIMIT 1")))
     await q.query(
       "INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,'Administrator',$3,'ADMIN')",
       [id(), config.email.toLowerCase(), hashPassword(config.password)]

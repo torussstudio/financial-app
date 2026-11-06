@@ -104,9 +104,11 @@ test("abandoned invoice drafts leave no gap in the invoice series", async () => 
   const kept = await db.tx(q => createDocument(q, actor, invoice));
   assert.equal((await db.tx(q => issueDocument(q, actor, kept.id))).number, "INV/2728/00001");
 });
-test("foreign-currency invoices can be drafted but not posted", async () => {
+// Behaviour change (Priority 2): foreign-currency invoices were blocked from posting outright; they now post their INR
+// equivalent, so issuing is refused only until an exchange rate is supplied (posting is covered in gst-compliance.test.ts).
+test("foreign-currency invoices can be drafted, and are not posted without an exchange rate (changed: rate now enables issue)", async () => {
   const d = await db.tx(q => createDocument(q, actor, { ...base, kind: "INVOICE", taxTreatment: "TAXABLE", currency: "USD" }));
-  await assert.rejects(() => db.tx(q => issueDocument(q, actor, d.id)), /exchange-rate/);
+  await assert.rejects(() => db.tx(q => issueDocument(q, actor, d.id)), /exchange rate/);
   assert.equal((await one(db, "SELECT status FROM documents WHERE id=$1", [d.id])).status, "DRAFT");
 });
 test("an advance recorded on an invoice is posted as an allocated receipt", async () => {

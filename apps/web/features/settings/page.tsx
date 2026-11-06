@@ -1,4 +1,4 @@
-import { Users, ShieldCheck, LockKeyhole, KeyRound } from "lucide-react";
+import { Users, ShieldCheck, LockKeyhole, KeyRound, FileCheck2 } from "lucide-react";
 import { CompanySettingsForm } from "../../components/forms/company-settings-form";
 import { ActionButton } from "../../components/action-button";
 import { EntryTable } from "../../components/entry-table";
@@ -32,6 +32,14 @@ export function SettingsPage({ ctx }: Props) {
             {data.company.closed_through ? "Entries are locked through " + day(data.company.closed_through) : "No accounting periods are currently locked."}
           </p>
           {session.user.role === "ADMIN" && <button className="btn" onClick={() => open("close")}>Manage lock</button>}
+        </section>
+        <section className="panel control-card">
+          <FileCheck2 size={22}/>
+          <h2>GST returns filed</h2>
+          <p>{(data.gstFilings || []).length
+            ? (data.gstFilings as Row[]).slice(0, 4).map(g => (g.return_type === "GSTR1" ? "GSTR-1" : "GSTR-3B") + " " + g.period + " · ARN " + g.arn).join(" · ")
+            : "No returns recorded as filed. Record a filing after you file on the GST portal; it can lock that month."}</p>
+          {session.user.role === "ADMIN" && <button className="btn" onClick={() => open("gstFiling")}>Record a filing</button>}
         </section>
         <section className="panel control-card">
           <Users size={22}/>

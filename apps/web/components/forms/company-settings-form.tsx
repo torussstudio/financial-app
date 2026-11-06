@@ -5,7 +5,7 @@ export function CompanySettingsForm({ company, role, busy, onSave }: {
   company: any;
   role: string;
   busy: boolean;
-  onSave: (values: Record<string, FormDataEntryValue>) => Promise<unknown>
+  onSave: (values: Record<string, any>) => Promise<unknown>
 }) {
   const [gstLogo, setGstLogo] = useState(company.gst_logo || "");
   const [nonGstLogo, setNonGstLogo] = useState(company.non_gst_logo || "");
@@ -31,9 +31,12 @@ export function CompanySettingsForm({ company, role, busy, onSave }: {
   };
   return <form className="form-grid settings-form company-profile-form"
     onSubmit={async e => { e.preventDefault(); setSaveError(""); try {
-    const values = Object.fromEntries(new FormData(e.currentTarget));
+    const values: Record<string, any> = Object.fromEntries(new FormData(e.currentTarget));
     values.gstLogo = gstLogo;
     values.nonGstLogo = nonGstLogo;
+    // An unticked checkbox submits nothing, so send the setting explicitly.
+    values.einvoiceEnabled = values.einvoiceEnabled === "on";
+    if (!values.b2clThreshold) delete values.b2clThreshold;
     await onSave(values);
   }
   catch (error: any) { setSaveError(error?.message || "Company details could not be saved."); } }}>
@@ -61,6 +64,20 @@ export function CompanySettingsForm({ company, role, busy, onSave }: {
     type="tel"
     defaultValue={company.contact_number || company.contact || company.phone || ""}/>
     </Field>
+    <h3 className="profile-section-title">GST & compliance <small>TDS, exports, GSTR-1 and e-invoicing. Nothing here connects to a government portal.</small></h3>
+    <Field label="TAN (optional)">
+      <input name="tan" defaultValue={company.tan || ""} maxLength={10} pattern="[A-Za-z]{4}[0-9]{5}[A-Za-z]" title="4 letters, 5 digits, 1 letter (e.g. TVDA12345B)" autoCapitalize="characters" placeholder="e.g. TVDA12345B"/>
+    </Field>
+    <Field label="LUT / ARN number (exports without IGST)">
+      <input name="lutNumber" defaultValue={company.lut_number || ""} maxLength={40} autoCapitalize="characters"/>
+    </Field>
+    <Field label="LUT valid from"><input name="lutValidFrom" type="date" defaultValue={company.lut_valid_from || ""}/></Field>
+    <Field label="LUT valid to"><input name="lutValidTo" type="date" defaultValue={company.lut_valid_to || ""}/></Field>
+    <Field label="B2CL threshold (₹)">
+      <input name="b2clThreshold" type="number" min="1" step=".01" defaultValue={company.b2cl_threshold ? String(Number(company.b2cl_threshold)) : "250000"}/>
+    </Field>
+    <label className="check-field"><input type="checkbox" name="einvoiceEnabled" defaultChecked={Boolean(company.einvoice_enabled)}/> E-invoicing applicable (prepare IRP JSON for B2B invoices and record the IRN)</label>
+    <div className="form-note wide">Inter-state B2C invoices above the B2CL threshold are reported invoice-wise in GSTR-1. The limit was reduced to ₹1,00,000 for invoices from 1 August 2024 (Notification 12/2024-CT) — confirm with your accountant and update it here. Live export invoices under LUT need the LUT number and are checked against its validity dates.</div>
     <h3 className="profile-section-title">GST bank details <small>Shown on GST documents when configured.</small>
     </h3>
     <Field label="Account holder name">

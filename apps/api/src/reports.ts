@@ -1,5 +1,5 @@
 import type { Database, Row } from "./db.js";
-import { D } from "./accounting.js";
+import { D, RECEIVABLE_KINDS, TDS_RECEIVABLE, tdsPayableSummary } from "./accounting.js";
 export async function getReport(
   db: Database,
   f: {
@@ -40,7 +40,10 @@ export async function getReport(
     bank,
     audit,
     items,
-    attachmentCounts
+    attachmentCounts,
+    tdsReceivable,
+    tdsPayable,
+    gstFilings
   ] = await Promise.all([
     db.query(
       "SELECT e.id,e.number,e.description,e.entry_date::text,e.kind,e.party_id,e.project_id,p.name AS party_name,a.code,a.name,a.kind AS account_kind,a.is_cash,a.voucher_category_kind,l.debit::text,l.credit::text FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id JOIN accounts a ON a.code=l.account_code LEFT JOIN parties p ON p.id=e.party_id WHERE " + cond + " ORDER BY e.entry_date,e.created_at",
@@ -56,7 +59,9 @@ export async function getReport(
       args
     ),
     db.query(
-      "SELECT d.*,d.issue_date::text,d.due_date::text,p.name AS party_name,COALESCE((SELECT SUM(a.amount) FROM allocations a JOIN journal_entries pe ON pe.id=a.entry_id WHERE a.document_id=d.id AND pe.entry_date<=$1::date),0)::text AS paid,COALESCE((SELECT SUM(a.amount) FROM allocations a JOIN journal_entries pe ON pe.id=a.entry_id WHERE a.document_id=d.id AND pe.kind='CREDIT_NOTE' AND pe.entry_date<=$1::date),0)::text AS credited FROM documents d JOIN parties p ON p.id=d.party_id WHERE d.issue_date<=$1::date ORDER BY d.created_at DESC",
+      // paid / credited are INR; a foreign-currency document is carried at its INR equivalent (inr_total) and also reports
+      // what has been settled in its own currency (foreign_paid). credited = settled by credit or debit notes, not money.
+      "SELECT d.*,d.issue_date::text,d.due_date::text,p.name AS party_name,COALESCE(d.subtotal_inr,d.subtotal)::text AS inr_subtotal,COALESCE(d.tax_inr,d.tax)::text AS inr_tax,COALESCE(d.total_inr,d.total)::text AS inr_total,COALESCE((SELECT SUM(a.amount) FROM allocations a JOIN journal_entries pe ON pe.id=a.entry_id WHERE a.document_id=d.id AND pe.entry_date<=$1::date),0)::text AS paid,COALESCE((SELECT SUM(a.foreign_amount) FROM allocations a JOIN journal_entries pe ON pe.id=a.entry_id WHERE a.document_id=d.id AND pe.entry_date<=$1::date),0)::text AS foreign_paid,COALESCE((SELECT SUM(a.amount) FROM allocations a JOIN journal_entries pe ON pe.id=a.entry_id WHERE a.document_id=d.id AND pe.kind IN ('CREDIT_NOTE','DEBIT_NOTE') AND pe.entry_date<=$1::date),0)::text AS credited FROM documents d JOIN parties p ON p.id=d.party_id WHERE d.issue_date<=$1::date ORDER BY d.created_at DESC",
       [f.to]
     ),
     db.query(
@@ -65,7 +70,7 @@ export async function getReport(
     ),
     db.query("SELECT * FROM accounts ORDER BY code"),
     db.query("SELECT p.*,a.name AS party_name FROM projects p LEFT JOIN parties a ON a.id=p.party_id ORDER BY p.archived,p.name"),
-    db.query("SELECT *,closed_through::text FROM company WHERE id='company'"),
+    db.query("SELECT *,closed_through::text,lut_valid_from::text,lut_valid_to::text FROM company WHERE id='company'"),
     db.query(
       "SELECT b.*,a.name,COALESCE((SELECT SUM(l.debit-l.credit) FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id WHERE l.account_code=b.account_code AND to_char(e.entry_date,'YYYY-MM')=b.month),0)::text AS actual FROM budgets b JOIN accounts a ON a.code=b.account_code WHERE month=$1",
       [month]
@@ -77,7 +82,15 @@ export async function getReport(
     db.query("SELECT b.*,b.entry_date::text,a.name AS account_name FROM bank_statement_lines b JOIN accounts a ON a.code=b.account_code ORDER BY b.entry_date DESC LIMIT 250"),
     db.query("SELECT a.*,u.name AS actor_name FROM audit_events a LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.created_at DESC LIMIT 100"),
     db.query("SELECT id,name,description,hsn,unit,rate::text,tax_rate::text,kind,archived FROM items ORDER BY archived,name"),
-    db.query("SELECT entity_id,COUNT(*)::int AS n FROM attachments GROUP BY entity_id")
+    db.query("SELECT entity_id,COUNT(*)::int AS n FROM attachments GROUP BY entity_id"),
+    // TDS deducted by clients on their receipts, per client, for reconciling with Form 26AS: what was booked in the selected
+    // range (reversals net out) and the balance still recoverable as of the end date.
+    db.query(
+      "SELECT p.id AS party_id,p.name AS party_name,p.gstin,COALESCE(SUM(CASE WHEN e.entry_date BETWEEN $2::date AND $3::date THEN l.debit-l.credit ELSE 0 END),0)::text AS in_range,COALESCE(SUM(CASE WHEN e.entry_date<=$3::date THEN l.debit-l.credit ELSE 0 END),0)::text AS balance,COUNT(*) FILTER (WHERE e.entry_date BETWEEN $2::date AND $3::date AND e.reversal_of IS NULL)::int AS receipts FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id LEFT JOIN parties p ON p.id=e.party_id WHERE l.account_code=$1 GROUP BY p.id,p.name,p.gstin ORDER BY p.name",
+      [TDS_RECEIVABLE, f.from, f.to]
+    ),
+    tdsPayableSummary(db, f.to),
+    db.query("SELECT g.*,g.filed_on::text,u.name AS filed_by_name FROM gst_filings g LEFT JOIN users u ON u.id=g.filed_by ORDER BY g.created_at DESC")
   ]);
   let income = new D(0), expense = new D(0), receipts = new D(0), payments = new D(0);
   const byMonth = new Map<string, {
@@ -103,7 +116,8 @@ export async function getReport(
     }
   }
   const filteredDocs = docs.rows.filter(d => (!f.partyId || d.party_id === f.partyId) && (!f.projectId || d.project_id === f.projectId));
-  const outstanding: Row[] = filteredDocs.filter(d => d.kind === "INVOICE" && d.status === "ISSUED").map(d => ({ ...d, outstanding: new D(d.total).sub(d.paid).toFixed(2) }));
+  // Receivables are invoices and sales debit notes, in INR (a foreign-currency invoice at its INR carrying amount).
+  const outstanding: Row[] = filteredDocs.filter(d => RECEIVABLE_KINDS.includes(d.kind) && d.status === "ISSUED").map(d => ({ ...d, outstanding: new D(d.inr_total).sub(d.paid).toFixed(2) }));
   const total = (xs: Row[], field: string) => xs.reduce((a, x) => a.add(x[field]), new D(0)).toFixed(2);
   const projectReports = projects.rows.map(p => { let revenue = new D(0), cost = new D(0); for (const l of lines.rows.filter(l => l.project_id === p.id)) {
     if (l.account_kind === "INCOME")
@@ -163,6 +177,13 @@ export async function getReport(
     recurring: recurring.rows,
     bankLines: bank.rows,
     audit: audit.rows,
+    tds: {
+      receivable: tdsReceivable.rows.filter(r => !new D(r.in_range).eq(0) || !new D(r.balance).eq(0)),
+      payable: tdsPayable,
+      receivableBalance: new D(balances.rows.find(a => a.code === TDS_RECEIVABLE)?.balance || 0).toFixed(2),
+      payableDue: tdsPayable.reduce((s, r) => s.add(r.due), new D(0)).toFixed(2)
+    },
+    gstFilings: gstFilings.rows,
     range: f
   };
 }

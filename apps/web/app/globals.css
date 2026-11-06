@@ -68,3 +68,12 @@
 .upload-btn{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;cursor:pointer}
 .upload-btn.disabled{opacity:.6;pointer-events:none}
 @media (max-width:680px){.allocation-input{width:96px!important}.attachment-list li{padding:9px}}
+
+/* Priority 2: statutory particulars on printed documents (zero-rated declaration, INR equivalents, e-invoice IRN and QR). */
+.doc-compliance{margin:14px 0 4px;padding-top:10px;border-top:1px dashed var(--line)}
+.doc-declaration{font-size:10px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;margin:0 0 6px}
+.doc-irn{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-top:8px}
+.doc-irn p{display:grid;grid-template-columns:72px 1fr;gap:8px;margin:2px 0;font-size:9px}
+.doc-irn p span{overflow-wrap:anywhere}
+.doc-qr{width:132px;height:132px;image-rendering:pixelated;flex:none}
+@media print{.doc-qr{width:110px;height:110px}.doc-compliance{break-inside:avoid}}

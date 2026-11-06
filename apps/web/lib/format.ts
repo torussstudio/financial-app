@@ -10,8 +10,22 @@ export const short = (v: number) => Math.abs(v) >= 100000 ? "₹" + (v / 100000)
 export const pretty = (s: string) => s === "ASSET" ? "Assets" : s === "REIMBURSEMENT" ? "Reimbursements" : s ? s.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : "";
 // Names used in notifications, e.g. "Quotation draft saved", "Payment receipt cancelled".
 export const documentLabel = (kind: string) => ({
-  INVOICE: "Invoice", QUOTATION: "Quotation", PROFORMA: "Proforma", BILL: "Payment receipt", CREDIT_NOTE: "Credit note", PURCHASE: "Vendor bill"
+  INVOICE: "Invoice", QUOTATION: "Quotation", PROFORMA: "Proforma", BILL: "Payment receipt", CREDIT_NOTE: "Credit note", PURCHASE: "Vendor bill",
+  DEBIT_NOTE: "Debit note", SALES_DEBIT_NOTE: "Debit note"
 } as Record<string, string>)[kind] || "Document";
+// Documents a client receipt settles: invoices and sales debit notes.
+export const RECEIVABLE_KINDS = ["INVOICE", "SALES_DEBIT_NOTE"];
+export const TDS_SECTIONS: [string, string][] = [
+  ["194C", "194C · Contractors"], ["194J", "194J · Professional / technical fees"], ["194I", "194I · Rent"],
+  ["194H", "194H · Commission / brokerage"], ["194Q", "194Q · Purchase of goods"], ["OTHER", "Other section"]
+];
+// GST is charged on taxable supplies and on zero-rated supplies with payment of IGST.
+export const gstCharged = (treatment: string, zeroRatedType?: string | null) => treatment === "TAXABLE" || (treatment === "ZERO_RATED" && zeroRatedType === "WITH_IGST");
+export const treatmentLabel = (d: Row) => d.tax_treatment === "ZERO_RATED"
+  ? (d.zero_rated_type === "WITH_IGST" ? "Zero-rated · with IGST" : "Zero-rated · LUT")
+  : pretty(d.tax_treatment);
+// The INR amount a document is carried at: a foreign-currency invoice's INR equivalent once issued, otherwise its total.
+export const inrTotal = (d: Row) => d.inr_total ?? d.total_inr ?? d.total;
 // Reads a chosen file as base64 (without the data: prefix) for the attachments API.
 export const fileToBase64 = (file: File) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader();
@@ -21,7 +35,11 @@ export const fileToBase64 = (file: File) => new Promise<string>((resolve, reject
 });
 export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 export const ATTACHMENT_ACCEPT = "application/pdf,image/png,image/jpeg,image/webp";
-export const outstandingOf = (d: Row) => Math.max(0, Number(moneySub(d.total, d.paid)));
+// Outstanding = total − allocations, in INR (allocations are always INR).
+export const outstandingOf = (d: Row) => Math.max(0, Number(moneySub(inrTotal(d), d.paid)));
+// What is still due on an issued foreign-currency invoice, in its own currency; null for INR documents.
+export const foreignOutstandingOf = (d: Row) => d.total_inr != null && d.currency && d.currency !== "INR"
+  ? Math.max(0, Number(moneySub(d.total, d.foreign_paid))) : null;
 export const voucherLabel = (kind: string) => ({
   EXPENSE: "Expense", INCOME: "Income", CAPITAL_IN: "Capital in", CAPITAL_RETURN: "Capital return", INVESTMENT: "Investment",
   ASSET: "Asset purchase", REIMBURSEMENT: "Reimbursement", LOAN_IN: "Loan received", LOAN_REPAY: "Loan repayment"

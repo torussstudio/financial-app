@@ -1,20 +1,19 @@
-import { EntryTable } from "../../components/entry-table";
-import { CATEGORY_REPORTS, Report } from "../../components/financial-views";
-import type { Row } from "../../lib/format";
+import { CATEGORY_REPORTS } from "../../components/financial-views";
+import { GstReturnsPanel } from "../../components/gst-returns-panel";
 type Props = {
   ctx: any
 };
 export function ReportsPage({ ctx }: Props) {
-  const { page, data, from, to, report, setReport, Report, } = ctx;
-  const filter: (rows: Row[]) => Row[] = ctx.filter;
+  const { page, data, from, to, report, setReport, Report, open, canWrite } = ctx;
   return <> {page === "reports" && <section className="panel">
       <div className="panel-toolbar">
         <div className="tabs">
-          {["P&L", ...Object.keys(CATEGORY_REPORTS), "Trial balance", "Balance sheet", "Ageing", "Payables ageing", "GST summary", "Audit"].map(t => <button key={t} className={report === t ? "selected" : ""} onClick={() => setReport(t)}>
+          {["P&L", ...Object.keys(CATEGORY_REPORTS), "Trial balance", "Balance sheet", "Ageing", "Payables ageing", "GST summary", "GST returns", "TDS", "Audit"].map(t => <button key={t} className={report === t ? "selected" : ""} onClick={() => setReport(t)}>
             {t}
           </button>)}
         </div>
+        {report === "TDS" && canWrite && <button className="btn small-btn" onClick={() => open("voucher", { tdsDeposit: true })}>Record TDS deposit</button>}
       </div>
-      <Report data={data} type={report} to={to} from={from}/>
+      {report === "GST returns" ? <GstReturnsPanel ctx={ctx}/> : <Report data={data} type={report} to={to} from={from}/>}
     </section>}</>;
 }

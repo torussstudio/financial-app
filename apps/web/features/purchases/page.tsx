@@ -1,25 +1,28 @@
 import { useState } from "react";
-import { Paperclip, Search } from "lucide-react";
+import { Eye, Paperclip, Search } from "lucide-react";
 import { ActionButton } from "../../components/action-button";
-import { moneySub, type Row } from "../../lib/format";
+import { outstandingOf, type Row } from "../../lib/format";
 type Props = {
   ctx: any
 };
 // Vendor bills (PURCHASE documents): draft → post (expense/asset + input GST against payables) → pay or apply an advance.
 export function PurchasesPage({ ctx }: Props) {
-  const { data, metric, money, day, fail, documentStatus, canWrite, open, Empty, search, setSearch, perform, api, Badge, to, attach } = ctx;
+  const { data, metric, money, day, fail, documentStatus, canWrite, open, Empty, search, setSearch, perform, api, Badge, to, attach, viewDoc } = ctx;
   const filter: (rows: Row[]) => Row[] = ctx.filter;
   const [tab, setTab] = useState("OPEN");
   const bills: Row[] = data.documents.filter((d: Row) => d.kind === "PURCHASE");
-  const due = (d: Row) => Number(moneySub(d.total, d.paid));
+  // Debit notes raised on vendor bills (goods returned / overbilled) have their own tab.
+  const notes: Row[] = data.documents.filter((d: Row) => d.kind === "DEBIT_NOTE");
+  const due = (d: Row) => outstandingOf(d);
   const open_ = bills.filter(d => d.status === "ISSUED" && due(d) > 0);
   const overdue = open_.filter(d => d.due_date < to);
   const sum = (rows: Row[], f: (r: Row) => number) => rows.reduce((s, r) => s + Math.round(f(r) * 100), 0) / 100;
-  const shown = filter(bills).filter(d =>
-    tab === "ALL" ? true
+  const shown = filter(tab === "NOTES" ? notes : bills).filter(d =>
+    tab === "ALL" || tab === "NOTES" ? true
     : tab === "OPEN" ? d.status === "ISSUED" && due(d) > 0
     : tab === "PAID" ? d.status === "ISSUED" && due(d) <= 0
     : d.status === "DRAFT");
+  const billOf = (n: Row) => bills.find(b => b.id === n.source_id);
   const advanceVendors = data.parties.filter((p: Row) => Number(p.advance_paid) > 0);
   const counts = data.attachmentCounts || {};
   return <>
@@ -38,7 +41,7 @@ export function PurchasesPage({ ctx }: Props) {
     <section className="panel">
       <div className="panel-toolbar">
         <div className="tabs" role="tablist">
-          {[["OPEN", "To pay", open_.length], ["DRAFT", "Drafts", bills.filter(d => d.status === "DRAFT").length], ["PAID", "Paid", null], ["ALL", "All bills", null]].map(([key, label, count]) =>
+          {[["OPEN", "To pay", open_.length], ["DRAFT", "Drafts", bills.filter(d => d.status === "DRAFT").length], ["PAID", "Paid", null], ["ALL", "All bills", null], ["NOTES", "Debit notes", notes.length || null]].map(([key, label, count]) =>
             <button key={String(key)} role="tab" aria-selected={tab === key} className={tab === key ? "selected" : ""} onClick={() => setTab(String(key))}>
               {label}{count !== null && <span className="count">{count}</span>}
             </button>)}
@@ -67,8 +70,21 @@ export function PurchasesPage({ ctx }: Props) {
           <tbody>
             {shown.map(d => {
               const status = documentStatus(d), vendor = data.parties.find((p: Row) => p.id === d.party_id);
+              if (d.kind === "DEBIT_NOTE") return <tr key={d.id}>
+                <td><strong>{d.number}</strong><small>Against {billOf(d)?.number || "bill"} · supplier bill {d.reference || "—"}{d.reverse_charge ? " · reverse charge" : ""}</small></td>
+                <td>{d.party_name}</td>
+                <td className="muted nowrap">{day(d.issue_date)}</td>
+                <td className="nowrap">—</td>
+                <td><Badge tone={d.status === "CANCELLED" ? "gray" : ""}>{d.status === "CANCELLED" ? "Cancelled" : "Issued"}</Badge></td>
+                <td className="right amount">−{money(d.total)}</td>
+                <td className="right amount">—</td>
+                <td><div className="row-actions">
+                  <ActionButton className="icon-btn" title="Preview debit note" onClick={() => viewDoc(d.id)}><Eye size={16}/></ActionButton>
+                  {canWrite && d.status === "ISSUED" && <button className="link small" onClick={() => open("cancel", { document: d })}>Cancel</button>}
+                </div></td>
+              </tr>;
               return <tr key={d.id}>
-                <td><strong>{d.reference || "—"}</strong><small>{d.number}{d.tax_treatment === "TAXABLE" ? (d.itc_eligible ? " · ITC" : " · ITC blocked") : " · no GST"}</small></td>
+                <td><strong>{d.reference || "—"}</strong><small>{d.number}{d.reverse_charge ? " · reverse charge" : ""}{d.tax_treatment === "TAXABLE" ? (d.itc_eligible ? " · ITC" : " · ITC blocked") : " · no GST"}{d.self_invoice_number ? " · self-invoice " + d.self_invoice_number : ""}</small></td>
                 <td>{d.party_name}</td>
                 <td className="muted nowrap">{day(d.issue_date)}</td>
                 <td className="nowrap">{day(d.due_date)}</td>
@@ -86,6 +102,7 @@ export function PurchasesPage({ ctx }: Props) {
                       onClick={() => perform("documents/" + d.id + "/issue", {}, "POST", (r: Row) => ({ title: "Vendor bill posted", description: (r?.number || "") + " · " + money(d.total) + " payable to " + d.party_name + "." }), "Couldn't post the bill").catch(() => {})}>Post</ActionButton>}
                     {canWrite && d.status === "ISSUED" && due(d) > 0 && <button className="link small" onClick={() => open("payment", { direction: "PAYMENT", document: d })}>Pay</button>}
                     {canWrite && d.status === "ISSUED" && due(d) > 0 && Number(vendor?.advance_paid) > 0 && <button className="link small" onClick={() => open("advance", { direction: "PAYMENT", partyId: d.party_id })}>Use advance</button>}
+                    {canWrite && d.status === "ISSUED" && due(d) > 0 && <button className="link small" onClick={() => open("debitNote", { document: d })}>Debit note</button>}
                     {canWrite && (d.status === "DRAFT" || (d.status === "ISSUED" && Number(d.paid) === 0)) && <button className="link small" onClick={() => open("cancel", { document: d })}>Cancel</button>}
                   </div>
                 </td>
@@ -94,7 +111,7 @@ export function PurchasesPage({ ctx }: Props) {
           </tbody>
         </table>
       </div> : <Empty label={tab === "OPEN" ? "No bills to pay" : "No vendor bills in this view"} detail="Enter a supplier's bill to track what you owe and the GST you can claim."/>}
-      <div className="panel-note">Posting a bill records the expense (or fixed asset), eligible GST as input tax credit and the payable. Payments and advances settle the balance; a bill with nothing paid can be cancelled, which posts a reversal.</div>
+      <div className="panel-note">Posting a bill records the expense (or fixed asset), eligible GST as input tax credit and the payable. Under reverse charge the supplier is owed the taxable value and the GST is booked as RCM payable (bills from unregistered suppliers get a self-invoice number). Payments, TDS, advances and debit notes settle the balance; a bill with nothing settled can be cancelled, which posts a reversal.</div>
     </section>
   </>;
 }

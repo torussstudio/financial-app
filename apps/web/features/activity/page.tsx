@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Search, } from "lucide-react";
 import { EntryTable } from "../../components/entry-table";
 import { Report } from "../../components/financial-views";
-import { moneySub, type Row } from "../../lib/format";
+import { moneySub, outstandingOf, inrTotal, RECEIVABLE_KINDS, type Row } from "../../lib/format";
 type Props = {
   ctx: any
 };
@@ -32,9 +32,9 @@ export function LedgerActivityPages({ ctx }: Props) {
   const received: Row[] = filter(data.entries)
     .filter((e: Row) => ["INCOME", "BILL", "RECEIPT"].includes(e.kind) && !e.reversed_by && Number(e.cash_in) > 0)
     .sort(byDate("entry_date"));
-  // Receivable: issued invoices with money still to come in, as of the end of the selected range.
+  // Receivable: issued invoices and sales debit notes with money still to come in (INR), as of the end of the selected range.
   const receivable: Row[] = filter(data.documents)
-    .filter((d: Row) => d.kind === "INVOICE" && d.status === "ISSUED" && Number(moneySub(d.total, d.paid)) > 0)
+    .filter((d: Row) => RECEIVABLE_KINDS.includes(d.kind) && d.status === "ISSUED" && outstandingOf(d) > 0)
     .sort(byDate("issue_date"));
   const showCredits = receivable.some(d => Number(d.credited) > 0);
   const sum = (rows: Row[], value: (r: Row) => any) => rows.reduce((t, r) => t + Math.round(Number(value(r) || 0) * 100), 0) / 100;
@@ -60,7 +60,7 @@ export function LedgerActivityPages({ ctx }: Props) {
       </div>}{page === "income" && <div className="kpi-grid">
         {[
     ["Received", receivedTotal, "Money in from clients in this range"],
-    ["Receivable", sum(receivable, d => moneySub(d.total, d.paid)), "Still due on issued invoices as of " + day(to)],
+    ["Receivable", sum(receivable, d => outstandingOf(d)), "Still due on issued invoices as of " + day(to)],
     ["Operating expenses", metric.expenses, "Selected date range and filters"],
     ["Net profit", metric.profit, "Selected date range and filters"]
   ].map(([name, v, note]) => <div className="kpi" key={name}>
@@ -100,17 +100,17 @@ export function LedgerActivityPages({ ctx }: Props) {
                 <td className="nowrap"><strong>{d.number}</strong></td>
                 <td>{d.party_name}</td>
                 <td className="nowrap">{day(d.due_date)}{d.due_date < to && <small>Overdue</small>}</td>
-                <td className="right amount">{money(d.total)}</td>
+                <td className="right amount">{money(inrTotal(d))}{d.currency && d.currency !== "INR" && <small>{d.currency} {d.total}</small>}</td>
                 <td className="right amount">{money(moneySub(d.paid, d.credited))}</td>
                 {showCredits && <td className="right amount">{money(d.credited)}</td>}
-                <td className="right amount">{money(moneySub(d.total, d.paid))}</td>
+                <td className="right amount">{money(outstandingOf(d))}</td>
               </tr>)}
               <tr className="total-row">
                 <td colSpan={4}>Total receivable</td>
-                <td className="right amount">{money(sum(receivable, d => d.total))}</td>
+                <td className="right amount">{money(sum(receivable, d => inrTotal(d)))}</td>
                 <td className="right amount">{money(sum(receivable, d => moneySub(d.paid, d.credited)))}</td>
                 {showCredits && <td className="right amount">{money(sum(receivable, d => d.credited))}</td>}
-                <td className="right amount">{money(sum(receivable, d => moneySub(d.total, d.paid)))}</td>
+                <td className="right amount">{money(sum(receivable, d => outstandingOf(d)))}</td>
               </tr>
             </tbody>
           </table>

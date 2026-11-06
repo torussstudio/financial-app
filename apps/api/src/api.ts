@@ -21,10 +21,20 @@ import {
   applyAdvance,
   businessToday,
   addDays,
-  daysBetween
+  daysBetween,
+  issueDebitNote,
+  issueSalesDebitNote,
+  postTdsDeposit,
+  recordEinvoice,
+  TDS_SECTIONS,
+  TDS_PAYABLE,
+  TDS_RECEIVABLE,
+  FX_GAIN,
+  FX_LOSS
 } from "./accounting.js";
 import { writer, admin, verifyPassword, hashPassword, login, digest, tokenFrom } from "./auth.js";
 import { getReport } from "./reports.js";
+import { buildGstReturns, buildEinvoice, periodRange } from "./gst-returns.js";
 const amount = z.string().regex(/^\d{1,13}(\.\d{1,2})?$/, "Use an amount with at most two decimal places.");
 const date = z.iso.date(), optionalId = z.string().min(1).nullable().optional();
 const voucher = z.object({
@@ -59,7 +69,11 @@ const docSchema = z.object({
   projectId: optionalId,
   date,
   dueDate: date,
-  taxTreatment: z.enum(["TAXABLE", "NIL_RATED", "EXEMPT", "OUTSIDE_GST"]),
+  taxTreatment: z.enum(["TAXABLE", "NIL_RATED", "EXEMPT", "OUTSIDE_GST", "ZERO_RATED"]),
+  // ZERO_RATED: export / SEZ supply under LUT (no IGST) or with payment of IGST (refund route).
+  zeroRatedType: z.enum(["LUT", "WITH_IGST"]).optional(),
+  // Vendor bills only: the supplier charged no GST and the company pays it under reverse charge.
+  reverseCharge: z.boolean().optional(),
   taxReason: z.string().max(500).optional(),
   placeOfSupply: z.string().regex(/^\d{2}$/),
   interstate: z.boolean().optional(),
@@ -121,8 +135,28 @@ const payment = z.object({
     phone: z.string().max(30).optional()
   }).optional(),
   description: z.string().min(2).max(300),
-  allocations: z.array(z.object({ documentId: z.string(), amount })).max(100)
+  // An INR document is settled by `amount`; a foreign-currency invoice by `foreignAmount` in its own currency.
+  allocations: z.array(z.object({ documentId: z.string(), amount: amount.optional(), foreignAmount: amount.optional() })).max(100),
+  // Receipts: TDS the client deducted. The money received is `amount`; the invoices settled may total amount + TDS.
+  tdsAmount: amount.optional(),
+  // Vendor payments: TDS we deducted. `amount` is the net paid from the bank; the bills settled may total amount + TDS.
+  tds: z.object({
+    section: z.enum(TDS_SECTIONS),
+    rate: z.string().regex(/^\d{1,3}(\.\d{1,4})?$/, "TDS rate is a percentage with at most four decimals."),
+    amount
+  }).optional()
+}).refine(b => b.direction === "RECEIPT" ? !b.tds : b.tdsAmount === undefined, "TDS fields do not match the payment direction.");
+const tdsDeposit = z.object({
+  date,
+  cashAccount: z.string(),
+  amount,
+  section: z.enum(TDS_SECTIONS),
+  period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Period must be YYYY-MM."),
+  challan: z.string().trim().min(3).max(60),
+  description: z.string().max(300).optional()
 });
+const exchangeRate = z.string().regex(/^\d{1,9}(\.\d{1,6})?$/, "Exchange rate: INR per unit with at most six decimals.");
+const returnPeriod = z.string().regex(/^(0[1-9]|1[0-2])\d{4}$/, "Return period must be MMYYYY.");
 function actor(req: any) {
   return req.user;
 }
@@ -371,11 +405,135 @@ export class ApiController {
   @Post("documents/:id/issue")
   async issue(
   @Req()
-  req: any, 
+  req: any,
+  @Param("id")
+  did: string,
+  @Body()
+  raw: unknown) {
+    writer(actor(req));
+    // Issuing is naturally idempotent (an issued document is returned as it is). A foreign-currency invoice takes its rate here.
+    const b = z.object({ exchangeRate: exchangeRate.optional() }).parse(raw ?? {});
+    return this.db.tx(q => issueDocument(q, actor(req), did, b));
+  }
+  @Post("documents/:id/debit-note")
+  async debitNote(
+    @Req()
+  req: any,
+    @Param("id")
+  did: string,
+    @Body()
+  raw: unknown
+  ) {
+    writer(actor(req));
+    const b = z.object({
+      date,
+      reason: z.string().min(3).max(300),
+      lines: z.array(z.object({ line: z.number().int().min(0), quantity: z.string().regex(/^\d{1,8}(\.\d{1,4})?$/) })).min(1).max(100)
+    }).parse(raw);
+    return idempotent(this.db, actor(req), req.headers["idempotency-key"], { op: "debit-note", did, b }, q => issueDebitNote(q, actor(req), did, b));
+  }
+  @Post("documents/:id/sales-debit-note")
+  async salesDebitNote(
+    @Req()
+  req: any,
+    @Param("id")
+  did: string,
+    @Body()
+  raw: unknown
+  ) {
+    writer(actor(req));
+    const b = z.object({
+      date,
+      dueDate: date.optional(),
+      reason: z.string().min(3).max(300),
+      lines: docSchema.shape.lines
+    }).parse(raw);
+    return idempotent(this.db, actor(req), req.headers["idempotency-key"], { op: "sales-debit-note", did, b }, q => issueSalesDebitNote(q, actor(req), did, b));
+  }
+  @Post("tds/deposit")
+  async tdsDeposit(
+    @Req()
+  req: any,
+    @Body()
+  raw: unknown
+  ) {
+    writer(actor(req));
+    const b = tdsDeposit.parse(raw);
+    return idempotent(this.db, actor(req), req.headers["idempotency-key"], { op: "tds-deposit", b }, q => postTdsDeposit(q, actor(req), b));
+  }
+  // ---- GST returns: working drafts only. Nothing is sent to the GST portal. ----
+  @Get("gst-returns")
+  async gstReturns(
+  @Query()
+  raw: any) {
+    const { period } = z.object({ period: returnPeriod }).parse(raw);
+    return buildGstReturns(this.db, period);
+  }
+  // Records that a return was filed on the portal (by the user, outside this app), optionally locking the month.
+  @Post("gst-filings")
+  async gstFiling(
+    @Req()
+  req: any,
+    @Body()
+  raw: unknown
+  ) {
+    admin(actor(req));
+    const b = z.object({
+      period: returnPeriod,
+      returnType: z.enum(["GSTR1", "GSTR3B"]),
+      arn: z.string().trim().regex(/^[A-Z0-9]{10,20}$/i, "Enter the ARN shown on the portal acknowledgement (letters and digits)."),
+      filedOn: date,
+      lockPeriod: z.boolean().default(false)
+    }).parse(raw);
+    return this.db.tx(async q => {
+      const { to } = periodRange(b.period);
+      need(b.filedOn >= to.slice(0, 8) + "01", "The filing date cannot precede the return period.");
+      need(!(await one(q, "SELECT id FROM gst_filings WHERE period=$1 AND return_type=$2", [b.period, b.returnType])), "This return is already recorded as filed for " + b.period + ".", 409);
+      const fid = id();
+      await q.query(
+        "INSERT INTO gst_filings(id,period,return_type,arn,filed_on,filed_by) VALUES($1,$2,$3,$4,$5,$6)",
+        [fid, b.period, b.returnType, b.arn.toUpperCase(), b.filedOn, actor(req).id]
+      );
+      await audit(q, actor(req), "gst.filed", fid, { period: b.period, returnType: b.returnType, arn: b.arn.toUpperCase(), text: (b.returnType === "GSTR1" ? "GSTR-1" : "GSTR-3B") + " filed for " + b.period });
+      // Reuses the accounting period lock: it only ever moves forward here, never reopens an already locked period.
+      if (b.lockPeriod) {
+        const old = await one(q, "SELECT closed_through::text FROM company WHERE id='company' FOR UPDATE");
+        if (!old.closed_through || old.closed_through < to) {
+          await q.query("UPDATE company SET closed_through=$1 WHERE id='company'", [to]);
+          await audit(q, actor(req), "period.lock", "company", { previous: old.closed_through, through: to, reason: "GST return filed for " + b.period });
+        }
+      }
+      return { id: fid };
+    });
+  }
+  @Get("documents/:id/einvoice")
+  async einvoice(
   @Param("id")
   did: string) {
+    const d = await one(this.db, "SELECT *,issue_date::text FROM documents WHERE id=$1", [did]);
+    need(d, "Document not found.", 404);
+    const company = await one(this.db, "SELECT * FROM company WHERE id='company'");
+    need(company.einvoice_enabled, "Turn on “E-invoicing applicable” in Settings to prepare e-invoice JSON.", 409);
+    return buildEinvoice(d, company);
+  }
+  @Post("documents/:id/irn")
+  async irn(
+    @Req()
+  req: any,
+    @Param("id")
+  did: string,
+    @Body()
+  raw: unknown
+  ) {
     writer(actor(req));
-    return this.db.tx(q => issueDocument(q, actor(req), did));
+    const b = z.object({
+      irn: z.string().trim().regex(/^[0-9a-fA-F]{64}$/, "The IRN is a 64-character hexadecimal value."),
+      ackNo: z.string().trim().regex(/^\d{1,20}$/, "The acknowledgement number is numeric."),
+      ackDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/, "Enter the acknowledgement date as YYYY-MM-DD HH:MM:SS."),
+      // The signed QR code is a JWS token returned by the IRP; it is printed as a QR image on the invoice.
+      signedQr: z.string().trim().min(20).max(4000).regex(/^[\x21-\x7e]+$/, "Paste the signed QR code text exactly as returned (no spaces).")
+    }).parse(raw);
+    return this.db.tx(q => recordEinvoice(q, actor(req), did, b));
   }
   @Post("documents/:id/credit-note")
   async creditNote(
@@ -428,18 +586,22 @@ export class ApiController {
     // paid = everything that settled the document; credited = the part settled by credit notes rather than money.
     const paid = await one(
       this.db,
-      "SELECT COALESCE(SUM(a.amount),0)::text AS paid,COALESCE(SUM(a.amount) FILTER (WHERE e.kind='CREDIT_NOTE'),0)::text AS credited FROM allocations a JOIN journal_entries e ON e.id=a.entry_id WHERE a.document_id=$1",
+      "SELECT COALESCE(SUM(a.amount),0)::text AS paid,COALESCE(SUM(a.foreign_amount),0)::text AS foreign_paid,COALESCE(SUM(a.amount) FILTER (WHERE e.kind IN ('CREDIT_NOTE','DEBIT_NOTE')),0)::text AS credited FROM allocations a JOIN journal_entries e ON e.id=a.entry_id WHERE a.document_id=$1",
       [did]
     );
-    const source = d.source_id ? await one(this.db, "SELECT number,kind FROM documents WHERE id=$1", [d.source_id]) : null;
+    const source = d.source_id ? await one(this.db, "SELECT number,kind,reference,issue_date::text FROM documents WHERE id=$1", [d.source_id]) : null;
     const companySnapshot = d.snapshot?.company || d.company_snapshot || {};
     const companyCurrent = await one(this.db, "SELECT * FROM company WHERE id='company'");
     return {
       ...d,
       paid: paid.paid,
+      foreign_paid: paid.foreign_paid,
       credited: paid.credited,
+      inr_total: d.total_inr ?? d.total,
       source_number: source?.number || null,
       source_kind: source?.kind || null,
+      source_reference: source?.reference || null,
+      source_date: source?.issue_date || null,
       company: {
         ...companyCurrent,
         ...companySnapshot,
@@ -461,16 +623,21 @@ export class ApiController {
     need(e, "Receipt not found.", 404);
     const paid = await one(
       this.db,
-      "SELECT COALESCE(SUM(l.debit+l.credit),0)::text AS amount FROM journal_lines l JOIN accounts a ON a.code=l.account_code WHERE l.entry_id=$1 AND a.is_cash=true",
-      [eid]
+      "SELECT COALESCE(SUM(l.debit+l.credit) FILTER (WHERE a.is_cash),0)::text AS amount,COALESCE(SUM(l.debit+l.credit) FILTER (WHERE l.account_code IN ($2,$3)),0)::text AS tds,COALESCE(SUM(l.credit-l.debit) FILTER (WHERE l.account_code IN ($4,$5)),0)::text AS fx FROM journal_lines l JOIN accounts a ON a.code=l.account_code WHERE l.entry_id=$1",
+      [eid, TDS_RECEIVABLE, TDS_PAYABLE, FX_GAIN, FX_LOSS]
     );
     return {
       ...e,
       amount: paid.amount,
+      // TDS withheld (by the client on a receipt, by us on a vendor payment) and any realised exchange gain (+) or loss (−).
+      tds_amount: paid.tds,
+      tds_detail: e.tds,
+      fx_difference: paid.fx,
+      gross_amount: new D(paid.amount).add(paid.tds).toFixed(2),
       company: e.snapshot?.company || await one(this.db, "SELECT * FROM company"),
       party: e.snapshot?.party || await one(this.db, "SELECT * FROM parties WHERE id=$1", [e.party_id]),
       allocations: (await this.db.query(
-        "SELECT d.number,a.amount::text FROM allocations a JOIN documents d ON d.id=a.document_id WHERE a.entry_id=$1",
+        "SELECT d.number,d.currency,a.amount::text,a.foreign_amount::text FROM allocations a JOIN documents d ON d.id=a.document_id WHERE a.entry_id=$1",
         [eid]
       )).rows
     };
@@ -565,9 +732,22 @@ export class ApiController {
       nonGstIfscCode: z.string().max(20).optional().default(""),
       nonGstBranchName: z.string().max(150).optional().default(""),
       nonGstBankDetails: z.string().max(1000).optional().default(""),
-      terms: z.string().max(2000)
+      terms: z.string().max(2000),
+      // GST & compliance settings. Left out = unchanged, so an older form never clears them.
+      tan: z.union([z.string().trim().toUpperCase().pipe(z.string().regex(/^[A-Z]{4}\d{5}[A-Z]$/, "TAN must be 4 letters, 5 digits and a letter (e.g. TVDA12345B).")), z.literal("")]).optional(),
+      lutNumber: z.string().trim().max(40).optional(),
+      lutValidFrom: z.union([date, z.literal("")]).optional(),
+      lutValidTo: z.union([date, z.literal("")]).optional(),
+      b2clThreshold: amount.optional(),
+      einvoiceEnabled: z.boolean().optional()
     }).parse(raw);
+    need(!b.lutValidFrom || !b.lutValidTo || b.lutValidFrom <= b.lutValidTo, "The LUT validity end date cannot precede its start date.");
+    need(b.b2clThreshold === undefined || new D(b.b2clThreshold).gt(0), "The B2CL threshold must be greater than zero.");
     return this.db.tx(async q => {
+      await q.query(
+        "UPDATE company SET tan=COALESCE($1,tan),lut_number=COALESCE($2,lut_number),lut_valid_from=CASE WHEN $3::text IS NULL THEN lut_valid_from ELSE NULLIF($3::text,'')::date END,lut_valid_to=CASE WHEN $4::text IS NULL THEN lut_valid_to ELSE NULLIF($4::text,'')::date END,b2cl_threshold=COALESCE($5::numeric,b2cl_threshold),einvoice_enabled=COALESCE($6::boolean,einvoice_enabled) WHERE id='company'",
+        [b.tan ?? null, b.lutNumber ?? null, b.lutValidFrom ?? null, b.lutValidTo ?? null, b.b2clThreshold ?? null, b.einvoiceEnabled ?? null]
+      );
       await q.query(
         "UPDATE company SET name=$1,address=$2,address_line2=$3,city=$4,state_name=$5,pin_code=$6,gstin=$7,state_code=$8,contact_number=$9,account_holder_name=$10,bank_name=$11,account_number=$12,ifsc_code=$13,branch_name=$14,bank_details=$15,terms=$16,gst_logo=$17,non_gst_logo=$18,non_gst_name=$19,non_gst_address=$20,non_gst_address_line2=$21,non_gst_city=$22,non_gst_state_name=$23,non_gst_state_code=$24,non_gst_pin_code=$25,non_gst_contact_number=$26,non_gst_account_holder_name=$27,non_gst_bank_name=$28,non_gst_account_number=$29,non_gst_ifsc_code=$30,non_gst_branch_name=$31,non_gst_bank_details=$32 WHERE id='company'",
         [
