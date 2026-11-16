@@ -88,7 +88,7 @@ export const amountInWords = (value: unknown): string => { const n = Number(valu
 // its HSN/SAC), and the page has a fixed budget of lines that shrinks as items are added, so a long description in one
 // item leaves less room for the others.
 export const DOC_MAX_ITEMS = 10;
-export const DOC_CHARS_PER_LINE = 50;
+export const DOC_CHARS_PER_LINE = 40;
 export const docLineCost = (description: unknown, hsn?: unknown) =>
   Math.max(1, Math.ceil(String(description || "").length / DOC_CHARS_PER_LINE)) + (String(hsn || "").trim() ? 1 : 0);
 export const docLineBudget = (items: number) => Math.floor(26.5 - 0.65 * Math.max(1, items));
