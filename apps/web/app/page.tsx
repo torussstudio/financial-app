@@ -192,7 +192,7 @@ export default function Page() {
   const [modal, setModal] = useState<Row | null>(null),
     [preview, setPreview] = useState<Row | null>(null),
     // Printers feed paper slightly off-centre: a per-browser horizontal print offset in mm (negative = move content left).
-    [printShift, setPrintShift] = useState("-3"),
+    [printShift, setPrintShift] = useState("0"),
     [users, setUsers] = useState<Row[]>([]),
     [docLines, setDocLines] = useState<Row[]>([{ description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }]);
   const [formKind, setFormKind] = useState("EXPENSE"),
@@ -305,7 +305,7 @@ export default function Page() {
       return () => { document.removeEventListener("keydown", fn); old?.focus(); };
     }
   }, [modal, preview, busy]);
-  useEffect(() => { try { const v = localStorage.getItem("printShiftX"); if (v !== null && v !== "") setPrintShift(v); } catch {} }, []);
+  useEffect(() => { try { const v = localStorage.getItem("printShiftX_v2"); if (v !== null && v !== "") setPrintShift(v); } catch {} }, []);
 
   // A dialog's error belongs to that dialog; once it closes, don't leave it on the page.
   const modalWasOpen = useRef(false);
@@ -994,7 +994,7 @@ export default function Page() {
         <div className="print-controls">
           <span>Document preview</span>
           <label className="print-shift" title="Printer feeds paper off-centre? Move the printout sideways. Negative = left, positive = right.">Shift (mm)
-            <input type="number" step="0.5" min="-10" max="10" value={printShift} onChange={e => { setPrintShift(e.target.value); try { localStorage.setItem("printShiftX", e.target.value); } catch {} }} />
+            <input type="number" step="0.5" min="-10" max="10" value={printShift} onChange={e => { setPrintShift(e.target.value); try { localStorage.setItem("printShiftX_v2", e.target.value); } catch {} }} />
           </label>
           <ActionButton className="btn" loadingText="Preparing PDF…" onClick={async () => { await Promise.all(Array.from(document.querySelectorAll<HTMLImageElement>(".document-page img")).map(img => img.decode().catch(() => {}))); window.print(); }}><Printer size={16} />Print / Save PDF</ActionButton>
           <button className="icon-btn" aria-label="Close preview" onClick={() => setPreview(null)}><X size={20} /></button>

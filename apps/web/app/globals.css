@@ -262,3 +262,15 @@
   .document-page:not(.payment-receipt-preview){padding-left:calc(8mm + var(--print-shift-x,0mm))!important;padding-right:calc(8mm - var(--print-shift-x,0mm))!important}
   .print-shift{display:none!important}
 }
+
+/* Item rows: black, slightly larger (all documents) */
+.document-page .document-table td{color:#000;font-size:12px}
+.document-page .document-table td strong{color:#000;font-weight:600}
+.document-page .document-table td small{color:#333}
+@media print{
+  .document-page[data-density] .document-table td{color:#000}
+  .document-page[data-density="airy"] .document-table-scroll .document-table td,.document-page[data-density="airy"] .standard-table td{font-size:11px}
+  .document-page[data-density="roomy"] .document-table-scroll .document-table td,.document-page[data-density="roomy"] .standard-table td{font-size:10.5px}
+  .document-page[data-density="snug"] .document-table-scroll .document-table td,.document-page[data-density="snug"] .standard-table td{font-size:10px}
+  .document-page[data-density="tight"] .document-table-scroll .document-table td,.document-page[data-density="tight"] .standard-table td{font-size:9.5px}
+}
