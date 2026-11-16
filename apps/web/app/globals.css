@@ -254,3 +254,11 @@
   .document-page .party-meta>div{grid-template-columns:52px 1fr}
   .document-page .document-head p{margin:0}
 }
+
+/* Print offset: the Shift (mm) box in the preview moves the whole page sideways for printers that feed paper off-centre */
+.print-shift{display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-left:auto;margin-right:8px;color:inherit}
+.print-shift input{width:64px;padding:4px 6px;border:1px solid #c9d3c4;border-radius:6px;font-size:12px}
+@media print{
+  .document-page:not(.payment-receipt-preview){padding-left:calc(8mm + var(--print-shift-x,0mm))!important;padding-right:calc(8mm - var(--print-shift-x,0mm))!important}
+  .print-shift{display:none!important}
+}
