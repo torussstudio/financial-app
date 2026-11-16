@@ -15,7 +15,8 @@ import {
   Wallet,
   BookOpen,
   Package,
-  ReceiptText
+  ReceiptText,
+  ScrollText
 } from "lucide-react";
 import { ActionButton } from "../action-button";
 export const navigation = [
@@ -24,7 +25,7 @@ export const navigation = [
   ["vouchers", "Daily vouchers", ArrowLeftRight], ["income", "Income & expenses", Wallet],
   ["capital", "Capital & investments", Landmark], ["parties", "Clients & vendors", Users],
   ["items", "Products & services", Package],
-  ["projects", "Projects", FolderKanban], ["bank", "Bank & cash", BookOpen],
+  ["projects", "Projects", FolderKanban], ["bank", "Bank & cash", BookOpen], ["ledger", "Ledger", ScrollText],
   ["reports", "Reports", ChartNoAxesCombined], ["recurring", "Recurring entries", Repeat2],
   ["budgets", "Budgets", Target], ["settings", "Settings", Settings],
 ] as const;

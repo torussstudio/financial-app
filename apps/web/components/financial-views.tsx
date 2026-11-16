@@ -1,6 +1,6 @@
 import qrcode from "qrcode-generator";
 import { Badge, Empty } from "./ui";
-import { amountInWords, day, gstCharged, inrTotal, money, outstandingOf, pretty, RECEIVABLE_KINDS, treatmentLabel, type Row } from "../lib/format";
+import { amountInWords, day, docLineCost, gstCharged, inrTotal, money, outstandingOf, pretty, RECEIVABLE_KINDS, treatmentLabel, type Row } from "../lib/format";
 // The signed QR code returned by the IRP, drawn locally (no network) with qrcode-generator 1.4.4.
 function SignedQr({ text }: { text: string }) {
   let src = "";
@@ -523,13 +523,15 @@ export function DocumentPreview({ d }: {
       {d.signed_qr && <SignedQr text={d.signed_qr}/>}
     </div>}
   </div> : null;
-  return <article className={"document-page" + (isPaymentReceipt ? " payment-receipt-preview" : "")}>
+  const usedLines = lines.reduce((n: number, l: any) => n + docLineCost(l.description, l.hsn), 0);
+  const density = usedLines <= 10 ? "roomy" : usedLines <= 15 ? "snug" : "tight";
+  return <article data-density={density} className={"document-page" + (isPaymentReceipt ? " payment-receipt-preview" : "")}>
         {company.demo && <div className="document-watermark">DEMONSTRATION · NOT A LEGAL TAX DOCUMENT</div>}
         {isPaymentReceipt && <header className="payment-receipt-company"><h2>{company.name}</h2>{companyAddress.map((line: string, i: number) => <p key={i}>{line}</p>)}{company.profile === "TAXABLE" && company.gstin && <p>GSTIN: {company.gstin}</p>}<p>Contact: {company.contact_number || company.contact || company.phone || ""} / {company.email || ""}</p></header>}
         {!isPaymentReceipt && <div className="document-head">
       <div>
-        {documentLogo ? <img className="doc-logo" src={documentLogo} alt={gstDoc ? "GST company logo" : "Non-GST company logo"}/> : <div className="doc-emblem">L.</div>}
-        <h2>{company.name}</h2>
+        {documentLogo ? <img className="doc-logo" src={documentLogo} alt={gstDoc ? "GST company logo" : "Non-GST company logo"}/> : <><div className="doc-emblem">L.</div>
+        <h2>{company.name}</h2></>}
         {(companyAddress.length ? companyAddress : ["Company address not configured"]).map((line: string, i: number) => <p key={i}>{line}</p>)}
         {((isInvoice && gstDoc) || isPaymentReceipt) && company.state_code && <p>State code: {company.state_code}</p>}
         {gstDoc && company.gstin && <p>GSTIN: {company.gstin}</p>}
@@ -537,26 +539,29 @@ export function DocumentPreview({ d }: {
       </div>
       <div className="document-title">
         <h1>{title}</h1>
-        <strong>{d.number}</strong>
+        <strong>{d.status === "DRAFT" ? String(d.number).replace(/^DRAFT-/, String(title).toUpperCase().replace(/\s+/g, "-") + "-") : d.number}</strong>
         {d.source_number && (isCreditNote || isSalesDebit) && <p>Against invoice {d.source_number}{d.source_date ? " dated " + day(d.source_date) : ""}</p>}
         {d.source_number && isPurchaseDebit && <p>Against your bill {d.source_reference || d.source_number}{d.source_date ? " dated " + day(d.source_date) : ""}</p>}
         <p>{day(isReceipt ? d.entry_date : d.issue_date)}</p>
-        {!isReceipt && <span>{d.status === "DRAFT" ? "DRAFT" : d.status === "CANCELLED" ? "CANCELLED" : "ISSUED"}</span>}
+        {!isReceipt && d.status !== "DRAFT" && <span>{d.status === "CANCELLED" ? "CANCELLED" : "ISSUED"}</span>}
       </div>
     </div>}
         {!isPaymentReceipt && <div className="document-parties">
-      <div>
+      <div className="party-block">
         <small>{isReceipt ? (d.kind === "PAYMENT" ? "PAID TO" : "RECEIVED FROM") : isPaymentReceipt ? "RECEIVED FROM" : isCreditNote ? "CREDIT TO" : isPurchaseDebit ? "DEBIT TO (SUPPLIER)" : "BILL TO"}</small>
         <h3>{party.name}</h3>
-        {party.address && <p>{party.address}</p>}
-        {party.contact_name && <p>Contact: {party.contact_name}</p>}
-        {party.email && <p>{party.email}</p>}
-        {party.phone && <p>Phone: {party.phone}</p>}
-        {(gstDoc || isReceipt || isPaymentReceipt) && party.gstin && <p>GSTIN: {party.gstin}</p>}
+        {party.address && <p className="party-address">{party.address}</p>}
+        <dl className="party-meta">
+          {party.contact_name && <div><dt>Contact</dt><dd>{party.contact_name}</dd></div>}
+          {party.phone && <div><dt>Phone</dt><dd>{party.phone}</dd></div>}
+          {party.email && <div><dt>Email</dt><dd>{party.email}</dd></div>}
+          {(gstDoc || isReceipt || isPaymentReceipt) && party.gstin && <div><dt>GSTIN</dt><dd>{party.gstin}</dd></div>}
+        </dl>
       </div>
-      <div>
-        {!isReceipt && <>{!isCreditNote && !isPurchaseDebit && <><small>{isPaymentReceipt ? "RECEIPT DATE" : "DUE / VALID UNTIL"}</small><p>{day(isPaymentReceipt ? d.issue_date : d.due_date)}</p></>}{(isInvoice && gstDoc || !isInvoice && !isPaymentReceipt) && <><small>TAX TREATMENT</small><p>{treatmentLabel(d)}{d.reverse_charge ? " · reverse charge" : ""} · {d.tax_treatment === "ZERO_RATED" && !d.place_of_supply?.match(/^(0[1-9]|[12]\d|3[0-8])$/) ? "Place of supply outside India" : "State " + d.place_of_supply}</p></>}</>}
-      </div>
+      {!isReceipt && <dl className="document-meta">
+        {!isCreditNote && !isPurchaseDebit && <div><dt>{isPaymentReceipt ? "Receipt date" : "Due / valid until"}</dt><dd>{day(isPaymentReceipt ? d.issue_date : d.due_date)}</dd></div>}
+        {(isInvoice && gstDoc || !isInvoice && !isPaymentReceipt) && <div><dt>Tax treatment</dt><dd>{treatmentLabel(d)}{d.reverse_charge ? " · reverse charge" : ""} · {d.tax_treatment === "ZERO_RATED" && !d.place_of_supply?.match(/^(0[1-9]|[12]\d|3[0-8])$/) ? "Place of supply outside India" : "State " + d.place_of_supply}</dd></div>}
+      </dl>}
     </div>}
         {isReceipt ? receiptBody : isPaymentReceipt ? paymentReceiptBody : isInvoice ? invoiceBody : standardBody}
         {compliance}
@@ -575,6 +580,6 @@ export function DocumentPreview({ d }: {
       </div>
       {!isPaymentReceipt && !isInvoice && !isCreditNote && <div><small>TERMS</small><p>{company.terms}</p></div>}
     </div>}
-    {!isPaymentReceipt && <div className="document-end">Thank you for your business.<span>{company.name}</span></div>}
+    {!isPaymentReceipt && <div className="document-end">Thank you for your business.</div>}
     </article>;
 }

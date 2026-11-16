@@ -226,6 +226,25 @@ export class ApiController {
     need(f.from <= f.to, "Start date must precede the end date.");
     return getReport(this.db, f);
   }
+  @Get("ledger")
+  async ledger(
+  @Query()
+  raw: any) {
+    const f = z.object({ account: z.string().min(1), from: date, to: date, partyId: z.string().min(1).optional() }).parse(raw);
+    need(f.from <= f.to, "Start date must precede the end date.");
+    if (f.account === "ALL") {
+      // Every posted line in the range, across accounts; a client/vendor narrows it to their own entries.
+      const args: any[] = [f.from, f.to];
+      if (f.partyId) args.push(f.partyId);
+      const all = await this.db.query("SELECT e.id,e.number,e.description,e.entry_date::text,e.kind,p.name AS party_name,a.code AS account_code,a.name AS account_name,l.debit::text,l.credit::text FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id JOIN accounts a ON a.code=l.account_code LEFT JOIN parties p ON p.id=e.party_id WHERE e.entry_date BETWEEN $1::date AND $2::date" + (f.partyId ? " AND e.party_id=$3" : "") + " ORDER BY e.entry_date,e.created_at,a.code LIMIT 2000", args);
+      return { account: { code: "ALL", name: "All accounts", kind: "ALL" }, opening: "0", rows: all.rows };
+    }
+    const account = await one(this.db, "SELECT code,name,kind FROM accounts WHERE code=$1", [f.account]);
+    need(account, "Account not found.", 404);
+    const opening = await one(this.db, "SELECT COALESCE(SUM(l.debit-l.credit),0)::text AS balance FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id WHERE l.account_code=$1 AND e.entry_date<$2::date" + (f.partyId ? " AND e.party_id=$3" : ""), f.partyId ? [f.account, f.from, f.partyId] : [f.account, f.from]);
+    const rows = await this.db.query("SELECT e.id,e.number,e.description,e.entry_date::text,e.kind,p.name AS party_name,l.debit::text,l.credit::text FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id LEFT JOIN parties p ON p.id=e.party_id WHERE l.account_code=$1 AND e.entry_date BETWEEN $2::date AND $3::date" + (f.partyId ? " AND e.party_id=$4" : "") + " ORDER BY e.entry_date,e.created_at", f.partyId ? [f.account, f.from, f.to, f.partyId] : [f.account, f.from, f.to]);
+    return { account, opening: opening?.balance || "0", rows: rows.rows };
+  }
   @Post("parties")
   async party(
     @Req()

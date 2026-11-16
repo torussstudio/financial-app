@@ -653,7 +653,8 @@ export async function issueDocument(
     let lines: any[];
     if (d.kind === "BILL")
       lines = [
-        { account: d.payment_method === "Cash" ? "1010" : "1000", debit: d.total },
+        // Payment receipts are non-GST documents: bank money lands in the non-GST bank (1020), cash in petty cash.
+        { account: d.payment_method === "Cash" ? "1010" : "1020", debit: d.total },
         { account: d.income_account || "4000", credit: d.total }
       ];
     else if (d.kind === "PURCHASE") {

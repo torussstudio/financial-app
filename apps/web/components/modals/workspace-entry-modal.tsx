@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { ActionButton } from "../action-button";
-import { ATTACHMENT_ACCEPT, foreignOutstandingOf, gstCharged, localDate, moneySub, outstandingOf, RECEIVABLE_KINDS, TDS_SECTIONS } from "../../lib/format";
+import { ATTACHMENT_ACCEPT, DOC_CHARS_PER_LINE, DOC_MAX_ITEMS, docLineBudget, docLineCost, foreignOutstandingOf, gstCharged, localDate, moneySub, outstandingOf, RECEIVABLE_KINDS, TDS_SECTIONS } from "../../lib/format";
 import { AllocationTable } from "./allocation-table";
 import { AttachmentsPanel } from "./attachments-panel";
 type Row = Record<string, any>;
@@ -20,6 +20,7 @@ export function WorkspaceEntryModal({ context }: {
     submit,
     Field,
     bankSelect,
+    bankForTreatment,
     partySelect,
     catSelect,
     voucherCategoryItems,
@@ -152,6 +153,10 @@ export function WorkspaceEntryModal({ context }: {
     REIMBURSEMENT: "Category"
   } as Row)[formKind] || "Category";
   const docLines: Row[] = context.docLines;
+  // A document must stay on one A4 page: at most 10 items, within a shared budget of printed description lines.
+  const docUsedLines = docLines.reduce((n, l) => n + docLineCost(l.description, l.hsn), 0);
+  const docLinesBudget = docLineBudget(docLines.length);
+  const docCanAddItem = docLines.length < DOC_MAX_ITEMS && docUsedLines + 1 <= docLineBudget(docLines.length + 1);
   // Lines carry a GST rate on taxable and zero-rated documents (under LUT it is reported in GSTR-1 but not charged).
   const rateColumn = taxTreatment === "TAXABLE" || taxTreatment === "ZERO_RATED";
   const docMoney = (v: any) => new Intl.NumberFormat(
@@ -268,6 +273,8 @@ export function WorkspaceEntryModal({ context }: {
     "INCOME",
     "CAPITAL_IN",
     "CAPITAL_RETURN",
+    "LOAN_IN",
+    "LOAN_REPAY",
     "INVESTMENT",
     "ASSET",
     "REIMBURSEMENT",
@@ -435,7 +442,7 @@ export function WorkspaceEntryModal({ context }: {
       // Exports are reported with place-of-supply code 96 (foreign country); a SEZ recipient keeps its own state code.
       if (e.target.value === "ZERO_RATED" && !String(clientInfo.gstin || "").trim()) setPlaceOfSupply("96");
     }}>
-                  {(newDocKind === "BILL" ? ["TAXABLE", "OUTSIDE_GST"] : ["TAXABLE", "ZERO_RATED", "NIL_RATED", "EXEMPT", "OUTSIDE_GST"]).map(k => <option key={k} value={k}>{k === "ZERO_RATED" ? "Zero-rated (export / SEZ)" : pretty(k)}</option>)}
+                  {(newDocKind === "BILL" ? ["TAXABLE", "OUTSIDE_GST"] : ["TAXABLE", "ZERO_RATED", ...(["NIL_RATED", "EXEMPT"].includes(taxTreatment) ? [taxTreatment] : []), "OUTSIDE_GST"]).map(k => <option key={k} value={k}>{k === "ZERO_RATED" ? "Zero-rated (export / SEZ)" : pretty(k)}</option>)}
                 </select>
               </Field>{newDocKind !== "BILL" && taxTreatment === "ZERO_RATED" && <><Field label="Zero-rated supply">
                   <select value={zeroRatedType} onChange={e => setZeroRatedType(e.target.value)}>
@@ -512,6 +519,7 @@ export function WorkspaceEntryModal({ context }: {
     placeholder={newDocKind === "BILL" ? "Payment description" : "Service or item — type to pick a saved one"}
     required
     list={newDocKind === "BILL" ? undefined : "item-options"}
+    maxLength={newDocKind === "BILL" ? undefined : Math.max(DOC_CHARS_PER_LINE, (docLinesBudget - (docUsedLines - docLineCost(l.description, l.hsn)) - (String(l.hsn || "").trim() ? 1 : 0)) * DOC_CHARS_PER_LINE)}
     value={l.description}
     onChange={e => setDocLines(docLines.map((x, j) => j === i ? (newDocKind === "BILL" ? { ...x, description: e.target.value } : withItem(x, e.target.value)) : x))}/>
                     {newDocKind !== "BILL" && <input aria-label={"Line " + (i + 1) + " HSN SAC"}
@@ -552,8 +560,12 @@ export function WorkspaceEntryModal({ context }: {
                 </div>)}
                 <button className="link"
     type="button"
+    disabled={newDocKind !== "BILL" && !docCanAddItem}
     onClick={() => setDocLines([...docLines, { description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }])}>
                   <Plus size={15}/>Add line item</button>
+                {newDocKind !== "BILL" && <small className="form-note" style={{ display: "block", color: docUsedLines > docLinesBudget ? "#b3412f" : undefined }}>
+                  {docLines.length}/{DOC_MAX_ITEMS} items · {docUsedLines}/{docLinesBudget} printed lines used. {docUsedLines > docLinesBudget ? "Too much text to fit one page: shorten a description." : "Items and descriptions share one A4 page."}
+                </small>}
               </div>{newDocKind === "BILL" && <div className="wide form-note receipt-live-total">
                 <strong>Amount Received: {money(draftPaymentTotal)}</strong>
                 <span>Amount in Words: {amountInWords(draftPaymentTotal)}</span>
@@ -652,7 +664,7 @@ export function WorkspaceEntryModal({ context }: {
                 <input name="date" type="date" defaultValue={today()} required/>
               </Field><Field label="Paid from bank (net of TDS, ₹)">
                 <input name="amount" type="number" min=".01" step=".01" required value={payAmount} onChange={e => setPayAmount(e.target.value)}/>
-              </Field><Field label="Paid from">{bankSelect()}</Field><Field label="Reference / description">
+              </Field><Field label="Paid from">{bankSelect("cashAccount", false, bankForTreatment(modal.document?.tax_treatment))}</Field><Field label="Reference / description">
                 <input name="description" required minLength={2} placeholder="UTR, cheque no. or note"/>
               </Field>{(() => {
                 const docs: Row[] = openDocsFor(payParty, "PURCHASE"), { inrAlloc } = paymentFigures(docs);
@@ -719,7 +731,7 @@ export function WorkspaceEntryModal({ context }: {
                 <input name="date" type="date" defaultValue={today()} required/>
               </Field><Field label="Amount credited to bank / cash (₹)">
                 <input name="amount" type="number" min=".01" step=".01" required value={payAmount} onChange={e => setPayAmount(e.target.value)}/>
-              </Field><Field label="Bank / cash">{bankSelect()}</Field><Field label="TDS deducted by client (₹, optional)">
+              </Field><Field label="Bank / cash">{bankSelect("cashAccount", false, bankForTreatment(modal.document?.tax_treatment))}</Field><Field label="TDS deducted by client (₹, optional)">
                 <input name="tdsAmount" type="number" min="0" step=".01" value={tdsAmount} onChange={e => setTdsAmount(e.target.value)} placeholder="0.00"/>
               </Field><Field label="Reference / description" wide>
                 <input name="description" required placeholder="Bank reference or payment note"/>

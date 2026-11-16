@@ -6,11 +6,11 @@ type Props = {
   ctx: any
 };
 export function BankPage({ ctx }: Props) {
-  const { page, data, money, day, canWrite, open, Empty, to, Badge, } = ctx;
+  const { page, data, money, day, canWrite, open, Empty, to, Badge, bankLabel } = ctx;
   const filter: (rows: Row[]) => Row[] = ctx.filter;
   return <> {page === "bank" && <><div className="kpi-grid three">
         {data.balances.filter((a: Row) => a.is_cash).map((a: Row) => <div className="kpi bank-card" key={a.code}>
-          <div className="kpi-label">{a.name}<Landmark size={18}/></div>
+          <div className="kpi-label">{bankLabel(a)}<Landmark size={18}/></div>
           <strong>{money(a.balance)}</strong>
           <small>Ledger balance · as of {day(to)}</small>
         </div>)}

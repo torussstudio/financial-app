@@ -83,3 +83,12 @@ function numberWords(input: number): string { const ones = [
 export const amountInWords = (value: unknown): string => { const n = Number(value); if (!Number.isFinite(n) || n < 0)
   return "Zero Rupees Only"; const paise = Math.round((n - Math.floor(n)) * 100),
     rupees = Math.floor(n + (paise === 100 ? 1 : 0)); const cents = paise === 100 ? 0 : paise; return `Rupees ${numberWords(rupees)}${cents ? ` and ${numberWords(cents)} Paise` : ""} Only`; };
+
+// One A4 page holds up to 10 line items. Every item costs one printed line per ~50 characters of description (plus one for
+// its HSN/SAC), and the page has a fixed budget of lines that shrinks as items are added, so a long description in one
+// item leaves less room for the others.
+export const DOC_MAX_ITEMS = 10;
+export const DOC_CHARS_PER_LINE = 50;
+export const docLineCost = (description: unknown, hsn?: unknown) =>
+  Math.max(1, Math.ceil(String(description || "").length / DOC_CHARS_PER_LINE)) + (String(hsn || "").trim() ? 1 : 0);
+export const docLineBudget = (items: number) => Math.floor(26.5 - 0.65 * Math.max(1, items));

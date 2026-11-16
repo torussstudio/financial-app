@@ -21,6 +21,7 @@ import { LedgerActivityPages } from "../features/activity/page";
 import { PartiesPage } from "../features/parties/page";
 import { ProjectsPage } from "../features/projects/page";
 import { BankPage } from "../features/bank/page";
+import { LedgerPage } from "../features/ledger/page";
 import { ReportsPage } from "../features/reports/page";
 import { BudgetsPage } from "../features/budgets/page";
 import { RecurringPage } from "../features/recurring/page";
@@ -754,9 +755,15 @@ export default function Page() {
   const selectableParties = (side: "" | "CLIENT" | "VENDOR", keep?: string) => (data?.parties || []).filter((p: Row) =>
     p.id === keep || (!p.archived && (!side || p.kind === side || p.kind === "BOTH")));
 
-  const bankSelect = (name = "cashAccount", dailyVoucher = false) =>
-    <select name={name} required>
-      {cashAccounts.filter((a: Row) => !dailyVoucher || ["1000", "1010"].includes(a.code)).map((a: Row) => <option key={a.code} value={a.code}>{dailyVoucher ? a.code === "1010" ? "Petty Cash" : "Bank Transfer" : a.name}</option>)}
+  // The company keeps a GST bank and a separate non-GST bank: 1000 takes GST documents, 1020 takes Outside-GST ones.
+  const bankLabel = (a: Row) =>
+    a.code === "1000" ? "GST bank" + (data?.company?.bank_name ? " · " + data.company.bank_name : "")
+    : a.code === "1020" ? "Non-GST bank" + (data?.company?.non_gst_bank_name ? " · " + data.company.non_gst_bank_name : "")
+    : a.name;
+  const bankForTreatment = (treatment?: string) => treatment === "OUTSIDE_GST" ? "1020" : "1000";
+  const bankSelect = (name = "cashAccount", dailyVoucher = false, preferred?: string) =>
+    <select name={name} required defaultValue={preferred}>
+      {cashAccounts.filter((a: Row) => !dailyVoucher || ["1000", "1010", "1020"].includes(a.code)).map((a: Row) => <option key={a.code} value={a.code}>{bankLabel(a)}</option>)}
     </select>;
 
   const partySelect = (name = "partyId", required = false) =>
@@ -864,7 +871,7 @@ export default function Page() {
   }
 
   const entryModalContext = {
-    modal, setModal, modalRef, busy, error, submit, Field, bankSelect, partySelect, catSelect,
+    modal, setModal, modalRef, busy, error, submit, Field, bankSelect, bankForTreatment, partySelect, catSelect,
     voucherCategoryItems, addVoucherCategory,
     formKind, setFormKind, today, pretty, data, newDocKind, setNewDocKind, taxTreatment, setTaxTreatment,
     docLines, setDocLines, placeOfSupply, setPlaceOfSupply, manualSupplyMode, setManualSupplyMode,
@@ -878,7 +885,7 @@ export default function Page() {
   const attach = (entityType: "DOCUMENT" | "ENTRY", entityId: string, title = "") => open("attachments", { entityType, entityId, title });
 
   const pageContext = {
-    page, data, metric, money, short, day, pretty, palette, accounts, go, setAccountFilter,
+    page, data, metric, money, short, day, pretty, palette, accounts, go, setAccountFilter, bankLabel,
     documentStatus, outstanding, canWrite, viewReceipt, viewDoc, open, Empty, taxTab, setTaxTab,
     docKind, setDocKind, search, setSearch, filteredDocs, perform, from, to, partyFilter, accountFilter,
     loading, busy, setError, notify, fail, report, setReport, Field, users, setUsers, api, session, setModal, EntryTable, Report,
@@ -923,6 +930,7 @@ export default function Page() {
               parties: "Every relationship. Every outstanding balance.",
               projects: "See the revenue and direct costs behind each project.",
               bank: "Know your balances. Match your bank movements.",
+              ledger: "Every posted line on an account, with its running balance.",
               reports: "Follow every total back to your ledger.",
               recurring: "Review a scheduled entry, then confirm the actual payment.",
               budgets: "Plan your spend and follow the actuals.",
@@ -930,10 +938,10 @@ export default function Page() {
             } as Row)[page]}</p>
           </div>
           <div className="heading-actions">
-            <button className="btn" onClick={() => exportRows(txs.map((e: Row) => ({ Date: e.entry_date, Number: e.number, Type: e.kind, Description: e.description, Amount: e.amount })), "account-entries-" + from + "-" + to)}>
+            {page !== "ledger" && <button className="btn" onClick={() => exportRows(txs.map((e: Row) => ({ Date: e.entry_date, Number: e.number, Type: e.kind, Description: e.description, Amount: e.amount })), "account-entries-" + from + "-" + to)}>
               <Download size={16} />Export visible entries
-            </button>
-            {canWrite && <button className="btn primary" onClick={() => open(page === "documents" ? "document" : page === "purchases" ? "purchase" : page === "items" ? "item" : page === "parties" ? "party" : page === "projects" ? "project" : page === "capital" ? "capital" : page === "budgets" ? "budget" : page === "recurring" ? "recurring" : "voucher")}>
+            </button>}
+            {canWrite && !["income", "capital", "ledger"].includes(page) && <button className="btn primary" onClick={() => open(page === "documents" ? "document" : page === "purchases" ? "purchase" : page === "items" ? "item" : page === "parties" ? "party" : page === "projects" ? "project" : page === "capital" ? "capital" : page === "budgets" ? "budget" : page === "recurring" ? "recurring" : "voucher")}>
               <Plus size={17} />{page === "documents" ? "New document" : page === "purchases" ? "New vendor bill" : page === "items" ? "Add item" : page === "parties" ? "Add contact" : page === "projects" ? "New project" : page === "budgets" ? "Set budget" : page === "recurring" ? "New schedule" : "New voucher"}
             </button>}
           </div>
@@ -965,6 +973,7 @@ export default function Page() {
         <PartiesPage ctx={pageContext} />
         <ProjectsPage ctx={pageContext} />
         <BankPage ctx={pageContext} />
+        <LedgerPage ctx={pageContext} />
         <ReportsPage ctx={pageContext} />
         <BudgetsPage ctx={pageContext} />
         <RecurringPage ctx={pageContext} />
