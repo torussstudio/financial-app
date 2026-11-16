@@ -200,3 +200,57 @@
 .document-page .doc-bottom .bank-fields{margin-top:6px;padding:8px 12px;background:#f6f6f6;border:1px solid #000}
 .document-page .doc-bottom .bank-fields p,.document-page .doc-bottom .bank-fields span,.document-page .doc-bottom .bank-fields strong{font-size:12.5px;line-height:1.5;color:#000!important;font-weight:700;print-color-adjust:exact;-webkit-print-color-adjust:exact}
 .document-page .doc-bottom .bank-fields p{margin:3px 0}
+
+/* Table header: bold, larger, black */
+.document-page .document-table th{font-weight:700;color:#111;font-size:10.5px;letter-spacing:.3px}
+@media print{
+  .document-page[data-density] .document-table-scroll .document-table th,.document-page[data-density] .standard-table th{font-size:10.5px;font-weight:700;color:#111}
+}
+
+/* Totals: separated from the items, black text, bold Total */
+.document-page[data-density] .doc-totals{margin:26px 0 14px auto}
+.document-page .doc-totals>div,.document-page .doc-totals span,.document-page .doc-totals strong{color:#111}
+.document-page .doc-totals>div{font-size:11.5px}
+.document-page .doc-totals strong{font-weight:600}
+.document-page .doc-totals .grand-total{margin-top:10px;background:#f1f1f1;border-top:1.5px solid #111;color:#111;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+.document-page .doc-totals .grand-total span,.document-page .doc-totals .grand-total strong{font-weight:800;color:#000;font-size:16px}
+
+/* Print: exact A4 width, no stray offsets, so the frame has equal margins on every side */
+@media print{
+  html,body{width:210mm;margin:0;padding:0}
+  .print-backdrop,.modal.print-modal{position:static!important;display:block!important;width:210mm!important;max-width:210mm!important;height:auto!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;overflow:visible!important}
+  .document-page,.document-page:not(.payment-receipt-preview){width:210mm!important;max-width:210mm!important;min-width:0!important;margin:0!important;box-sizing:border-box}
+}
+
+/* One-page fit tuning (10 items, GST + non-GST) */
+@media print{
+  .document-page:not(.payment-receipt-preview){padding:8mm!important}
+  .document-page .doc-frame{padding:6mm 7mm 5mm;min-height:281mm}
+  .document-page .doc-logo.gst-logo{max-width:280px;max-height:84px}
+  .document-page .doc-logo{max-height:70px;margin-bottom:6px}
+  .document-page .document-head{padding-bottom:8px}
+  .document-page .document-head p{margin:1px 0;line-height:1.4}
+  .document-page .document-title h1{margin:0 0 4px;font-size:26px}
+  .document-page[data-density] .document-parties{margin:8px 0 8px}
+  .document-page .document-parties>.party-block,.document-page .document-parties>.document-meta{padding-top:8px;padding-bottom:8px}
+  .document-page .party-block .party-address{margin-bottom:4px}
+  .document-page .party-meta,.document-page .document-meta{gap:2px}
+  .document-page[data-density] .document-table-scroll .document-table td{padding-top:4px;padding-bottom:4px}
+  .document-page[data-density] .document-table-scroll .document-table th{padding-top:5px;padding-bottom:5px}
+  .document-page[data-density="airy"] .document-table-scroll .document-table td{padding-top:11px;padding-bottom:11px}
+  .document-page[data-density] .doc-totals{margin:14px 0 10px auto}
+  .document-page .doc-totals>div{padding:3px 12px}
+  .document-page .doc-totals .grand-total{margin-top:6px;padding:6px 12px}
+  .document-page .doc-bottom{margin-top:auto;padding-top:6px}
+  .document-page .doc-bottom .bank-fields{padding:5px 10px}
+  .document-page .doc-bottom .bank-fields p,.document-page .doc-bottom .bank-fields span,.document-page .doc-bottom .bank-fields strong{font-size:11.5px;line-height:1.35}
+  .document-page .doc-bottom .bank-fields p{margin:1px 0}
+}
+@media print{
+  .document-page[data-density="tight"] .document-table-scroll .document-table td,.document-page[data-density="tight"] .standard-table td{padding-top:2.5px;padding-bottom:2.5px}
+  .document-page[data-density="snug"] .document-table-scroll .document-table td,.document-page[data-density="snug"] .standard-table td{padding-top:3.5px;padding-bottom:3.5px}
+  .document-page .doc-logo.gst-logo{max-height:72px}
+  .document-page .party-meta{grid-template-columns:1fr 1fr;column-gap:14px}
+  .document-page .party-meta>div{grid-template-columns:52px 1fr}
+  .document-page .document-head p{margin:0}
+}
