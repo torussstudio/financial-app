@@ -274,3 +274,16 @@
   .document-page[data-density="snug"] .document-table-scroll .document-table td,.document-page[data-density="snug"] .standard-table td{font-size:10px}
   .document-page[data-density="tight"] .document-table-scroll .document-table td,.document-page[data-density="tight"] .standard-table td{font-size:9.5px}
 }
+
+/* Bill-to section: all text black */
+.document-page .document-parties,.document-page .document-parties h3,.document-page .document-parties p,.document-page .party-block .party-address,.document-page .party-meta dt,.document-page .party-meta dd,.document-page .document-meta dt,.document-page .document-meta dd,.document-page .document-parties small{color:#000}
+.document-page .party-meta dt,.document-page .document-meta dt{font-weight:600}
+
+/* Payment receipt (same design as invoices) */
+.document-page .pr-table{width:100%;table-layout:fixed;min-width:0}
+.document-page .pr-table th:nth-child(1),.document-page .pr-table td:nth-child(1){width:8%}
+.document-page .pr-table th:nth-child(3),.document-page .pr-table td:nth-child(3){width:26%}
+.document-page .pr-table td,.document-page .pr-table th{white-space:normal;overflow-wrap:anywhere;padding:7px 4px}
+.document-page .pr-notes{margin-top:16px}
+.document-page .pr-notes p{margin:5px 0;font-size:11px;color:#000;line-height:1.5}
+@media print{.document-page[data-density] .pr-table td{padding-top:5px;padding-bottom:5px}}

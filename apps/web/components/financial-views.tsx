@@ -426,37 +426,27 @@ export function DocumentPreview({ d }: {
         {Number(d.fx_difference) !== 0 && <tr><td>Foreign exchange {Number(d.fx_difference) > 0 ? "gain" : "loss"} on settlement</td><td className="right">{docMoney(Math.abs(Number(d.fx_difference)))}</td></tr>}
       </tbody>
     </table></>;
-  const paymentReceiptBody = <div className="payment-receipt-content"><table className="payment-receipt-grid">
+  // A payment receipt now shares the invoice design: same header, boxed page, bill-to band, item table and totals.
+  const paymentReceiptBody = <>
+    <table className="document-table pr-table">
+      <thead><tr><th>SL</th><th>Description</th><th className="right">Amount received</th></tr></thead>
       <tbody>
-        <tr><th colSpan={2}>PAYMENT RECEIPT</th></tr>
-        <tr><td>Receipt No: {d.number}</td><td>Date: {receiptDate(d.issue_date)}</td></tr>
-        <tr><td>Receipt date: {receiptDate(d.issue_date)}</td><td>Place: {[String(company.city || "").toLocaleUpperCase(), company.state_name].filter(Boolean).join(", ")}</td></tr>
-        <tr><td>State: {company.state_name || ""}</td><td>Contact: {company.contact_number || company.contact || company.phone || ""}</td></tr>
-        <tr><th>RECEIVED FROM</th><th /></tr>
-        <tr><td>Name: {party.name || ""}</td><td /></tr>
-        <tr><td>Address: {party.address || ""}</td><td /></tr>
-      </tbody>
-    </table><table className="payment-receipt-grid payment-receipt-lines">
-      <thead><tr><th>S. No.</th><th>Product Description</th><th className="right">Amount Received<br/>(INR)</th></tr></thead>
-      <tbody>
-        {lines.map((
-    line,
-    i
-  ) => <tr key={i}>
+        {lines.map((line: Row, i: number) => <tr key={i}>
           <td>{i + 1}</td>
-          <td>{line.description}</td>
-          <td className="right">{Number(line.base || 0).toLocaleString("en-IN", { useGrouping: false, maximumFractionDigits: 2 })}</td>
+          <td><strong>{line.description}</strong></td>
+          <td className="right">{docMoney(line.base)}</td>
         </tr>)}
       </tbody>
-    </table><div className="payment-receipt-bottom"><table className="payment-receipt-grid">
-      <tbody>
-        <tr><th>Amount in Words</th></tr>
-        <tr><td>{amountInWords(total)}</td></tr>
-        <tr><th>Mode of Payment</th></tr>
-        {["Cash", "Cheque", "Bank Transfer"].map(method => <tr key={method}><td>{method}<span className="payment-receipt-check">{d.payment_method === method ? "✓" : ""}</span></td></tr>)}
-        <tr><td>Certified that the particulars given above are true and correct.</td></tr>
-      </tbody>
-    </table><div className="payment-receipt-blank" aria-hidden="true" /></div></div>;
+    </table>
+    <div className="doc-totals">
+      <div className="grand-total"><span>Total received</span><strong>{docMoney(total)}</strong></div>
+    </div>
+    <div className="pr-notes">
+      <p><strong>Amount in words:</strong> {amountInWords(total)}</p>
+      <p><strong>Mode of payment:</strong> {d.payment_method || "—"}</p>
+      <p>Certified that the particulars given above are true and correct.</p>
+    </div>
+  </>;
   const invoiceRows = lines.map((
     line,
     i
@@ -558,11 +548,10 @@ export function DocumentPreview({ d }: {
   </div> : null;
   const usedLines = lines.reduce((n: number, l: any) => n + docLineCost(l.description, l.hsn), 0);
   const density = usedLines <= 5 ? "airy" : usedLines <= 10 ? "roomy" : usedLines <= 15 ? "snug" : "tight";
-  return <article data-density={density} style={{ ["--doc-accent" as any]: accent }} className={"document-page" + (gstDoc ? "" : " non-gst-doc") + (isPaymentReceipt ? " payment-receipt-preview" : "")}>
+  return <article data-density={density} style={{ ["--doc-accent" as any]: accent }} className={"document-page" + (gstDoc ? "" : " non-gst-doc")}>
       <div className="doc-frame">
         {company.demo && <div className="document-watermark">DEMONSTRATION · NOT A LEGAL TAX DOCUMENT</div>}
-        {isPaymentReceipt && <header className="payment-receipt-company"><h2>{company.name}</h2>{companyAddress.map((line: string, i: number) => <p key={i}>{line}</p>)}{company.profile === "TAXABLE" && company.gstin && <p>GSTIN: {company.gstin}</p>}<p>Contact: {company.contact_number || company.contact || company.phone || ""} / {company.email || ""}</p></header>}
-        {!isPaymentReceipt && <div className="document-head">
+        {<div className="document-head">
       <div>
         {documentLogo ? <img className={"doc-logo" + (gstDoc ? " gst-logo" : "")} src={documentLogo} alt={gstDoc ? "GST company logo" : "Non-GST company logo"}/> : <><div className="doc-emblem">L.</div>
         <h2>{company.name}</h2></>}
@@ -580,7 +569,7 @@ export function DocumentPreview({ d }: {
         {!isReceipt && d.status !== "DRAFT" && <span>{d.status === "CANCELLED" ? "CANCELLED" : "ISSUED"}</span>}
       </div>
     </div>}
-        {!isPaymentReceipt && <div className="document-parties">
+        {<div className="document-parties">
       <div className="party-block">
         <small>{isReceipt ? (d.kind === "PAYMENT" ? "PAID TO" : "RECEIVED FROM") : isPaymentReceipt ? "RECEIVED FROM" : isCreditNote ? "CREDIT TO" : isPurchaseDebit ? "DEBIT TO (SUPPLIER)" : "BILL TO"}</small>
         <h3>{party.name}</h3>
