@@ -32,7 +32,7 @@ import {
   FX_GAIN,
   FX_LOSS
 } from "./accounting.js";
-import { writer, admin, verifyPassword, hashPassword, login, digest, tokenFrom } from "./auth.js";
+import { writer, admin, DUMMY_HASH, verifyPassword, hashPassword, login, digest, tokenFrom } from "./auth.js";
 import { getReport } from "./reports.js";
 import { buildGstReturns, buildEinvoice, periodRange } from "./gst-returns.js";
 const amount = z.string().regex(/^\d{1,13}(\.\d{1,2})?$/, "Use an amount with at most two decimal places.");
@@ -182,7 +182,8 @@ export class ApiController {
   ) {
     const b = z.object({ email: z.email(), password: z.string().min(1).max(256) }).parse(body);
     const u = await one(this.db, "SELECT * FROM users WHERE lower(email)=$1 AND active=true", [b.email.toLowerCase()]);
-    need(u && verifyPassword(b.password, u.password_hash), "Email or password is incorrect.", 401);
+    const passwordOk = await verifyPassword(b.password, u?.password_hash || DUMMY_HASH);
+    need(u && passwordOk, "Email or password is incorrect.", 401);
     return login(this.db, res, u);
   }
   @Post("auth/demo")
@@ -210,6 +211,12 @@ export class ApiController {
     await this.db.query("DELETE FROM sessions WHERE id=$1", [digest(tokenFrom(req) || "")]);
     res.clearCookie("accounts_session", { path: "/" });
     return { ok: true };
+  }
+  // Logos are large data URLs, so the overview omits them; the web app fetches them once and re-fetches only when logo_hash changes.
+  @Get("company/logos")
+  async companyLogos() {
+    const r = await one(this.db, "SELECT gst_logo,non_gst_logo FROM company WHERE id='company'");
+    return { gst_logo: r?.gst_logo || "", non_gst_logo: r?.non_gst_logo || "" };
   }
   @Get("overview")
   overview(
@@ -855,7 +862,7 @@ export class ApiController {
       const uid = id();
       await q.query(
         "INSERT INTO users(id,name,email,password_hash,role) VALUES($1,$2,$3,$4,$5)",
-        [uid, b.name, b.email.toLowerCase(), hashPassword(b.password), b.role]
+        [uid, b.name, b.email.toLowerCase(), await hashPassword(b.password), b.role]
       );
       await audit(q, actor(req), "user.create", uid, { role: b.role });
       return { id: uid };
@@ -1175,7 +1182,7 @@ export class ApiController {
     return this.db.tx(async q => {
       const u = await one(q, "SELECT id FROM users WHERE id=$1 FOR UPDATE", [uid]);
       need(u, "User not found.", 404);
-      await q.query("UPDATE users SET password_hash=$2 WHERE id=$1", [uid, hashPassword(b.password)]);
+      await q.query("UPDATE users SET password_hash=$2 WHERE id=$1", [uid, await hashPassword(b.password)]);
       await q.query("DELETE FROM sessions WHERE user_id=$1", [uid]);
       await audit(q, actor(req), "user.password.reset", uid);
       return { ok: true };
@@ -1192,8 +1199,8 @@ export class ApiController {
     need(b.currentPassword !== b.newPassword, "Choose a new password that differs from the current one.");
     return this.db.tx(async q => {
       const u = await one(q, "SELECT * FROM users WHERE id=$1 FOR UPDATE", [actor(req).id]);
-      need(u && verifyPassword(b.currentPassword, u.password_hash), "Your current password is incorrect.", 400);
-      await q.query("UPDATE users SET password_hash=$2 WHERE id=$1", [u.id, hashPassword(b.newPassword)]);
+      need(u && await verifyPassword(b.currentPassword, u.password_hash), "Your current password is incorrect.", 400);
+      await q.query("UPDATE users SET password_hash=$2 WHERE id=$1", [u.id, await hashPassword(b.newPassword)]);
       // Keep this session; sign out every other device.
       await q.query("DELETE FROM sessions WHERE user_id=$1 AND id<>$2", [u.id, digest(tokenFrom(req) || "")]);
       await audit(q, actor(req), "user.password.change", u.id);

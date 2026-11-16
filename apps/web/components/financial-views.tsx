@@ -351,6 +351,8 @@ export function DocumentPreview({ d }: {
   // A sales debit note prints like an invoice (it is billed to the client); a purchase debit note is addressed to the vendor.
   const isSalesDebit = !isReceipt && d.kind === "SALES_DEBIT_NOTE", isPurchaseDebit = !isReceipt && d.kind === "DEBIT_NOTE";
   const isInvoice = !isReceipt && (d.kind === "INVOICE" || isSalesDebit);
+  // A proforma or quotation lists its items exactly like an invoice (8 columns with GST charged, 5 without) but never takes payments.
+  const isProforma = !isReceipt && (d.kind === "PROFORMA" || d.kind === "QUOTATION");
   // gstDoc: a GST document of the registered company (taxable or zero-rated); gst: GST is actually charged on it.
   const gstDoc = !isReceipt && !isPaymentReceipt && ["TAXABLE", "ZERO_RATED"].includes(d.tax_treatment),
     gst = gstDoc && gstCharged(d.tax_treatment, d.zero_rated_type);
@@ -375,9 +377,9 @@ export function DocumentPreview({ d }: {
     total = Number(d.total || 0),
     // Issued invoices show what was actually received (the advance is posted as an allocated receipt); drafts show the planned advance.
     credited = foreignDoc ? 0 : Math.max(0, Number(d.credited || 0)),
-    settled = d.status === "ISSUED" ? Math.max(0, Number((foreignDoc ? d.foreign_paid : d.paid) || 0)) : Math.max(0, Number(d.advance_amount || 0)),
+    settled = d.status === "ISSUED" && !isProforma ? Math.max(0, Number((foreignDoc ? d.foreign_paid : d.paid) || 0)) : Math.max(0, Number(d.advance_amount || 0)),
     // Money actually received excludes the part settled by credit notes.
-    advance = Math.max(0, settled - (d.status === "ISSUED" ? credited : 0));
+    advance = Math.max(0, settled - (d.status === "ISSUED" && !isProforma ? credited : 0));
   let cgst = 0, sgst = 0;
   if (gst && !d.interstate)
     for (const line of lines) {
@@ -459,22 +461,22 @@ export function DocumentPreview({ d }: {
       <td><strong>{line.description}</strong>{line.hsn && <small>HSN/SAC {line.hsn}</small>}</td>
       <td className="right">{line.quantity}</td>
       <td className="right">{docMoney(line.price)}</td>
-      <td className="right">{docMoney(line.base)}</td>
+      {gst && <td className="right">{docMoney(line.base)}</td>}
       {gst && (d.interstate ? <td className="right">{docMoney(tax)}</td> : <><td className="right">{docMoney(half)}</td><td className="right">{docMoney(otherHalf)}</td></>)}
       <td className="right">{docMoney(Number(line.base || 0) + tax)}</td>
     </tr>;
   });
   const invoiceBody = <><div className="document-table-scroll">
-      <table className="document-table">
+      <table className={"document-table" + (gst ? "" : " plain-cols")}>
         <thead>
           <tr>
             <th>SL</th>
             <th>Description</th>
             <th className="right">Qty</th>
             <th className="right">Rate</th>
-            <th className="right">Line amount</th>
+            {gst && <th className="right">Line amount</th>}
             {gst && (d.interstate ? <th className="right">IGST</th> : <><th className="right">CGST</th><th className="right">SGST</th></>)}
-            <th className="right">Total</th>
+            <th className="right">{gst ? "Total" : "Amount"}</th>
           </tr>
         </thead>
         <tbody>{invoiceRows}</tbody>
@@ -482,11 +484,11 @@ export function DocumentPreview({ d }: {
     </div><div className="doc-totals">
       <div><span>Subtotal</span><strong>{docMoney(subtotal)}</strong></div>
       {gst && (d.interstate ? <div><span>IGST</span><strong>{docMoney(igst)}</strong></div> : <><div><span>CGST</span><strong>{docMoney(cgst)}</strong></div><div><span>SGST</span><strong>{docMoney(sgst)}</strong></div></>)}
-      <div><span>{d.status === "ISSUED" ? "Amount Received" : "Advance Paid"}</span><strong>{docMoney(advance)}</strong></div>
+      <div><span>{d.status === "ISSUED" && !isProforma ? "Amount Received" : "Advance Paid"}</span><strong>{docMoney(advance)}</strong></div>
       {credited > 0 && <div><span>Credit notes</span><strong>{docMoney(credited)}</strong></div>}
       <div><span>Balance Payable</span><strong>{docMoney(Math.max(0, total - settled))}</strong></div>
       <div className="grand-total"><span>Total</span><strong>{docMoney(total)}</strong></div>
-    </div>{gst && d.tax_reason && <p className="doc-note">Tax treatment basis: {d.tax_reason}</p>}</>;
+    </div>{gst && d.tax_reason && <p className="doc-note">Tax treatment basis: {d.tax_reason}</p>}{isProforma && d.notes && <p className="doc-note">{d.notes}</p>}</>;
   const standardBody = <><table className="document-table standard-table">
       <thead>
         <tr>
@@ -581,12 +583,12 @@ export function DocumentPreview({ d }: {
           {(gstDoc || isReceipt || isPaymentReceipt) && party.gstin && <div><dt>GSTIN</dt><dd>{party.gstin}</dd></div>}
         </dl>
       </div>
-      {!isReceipt && <dl className="document-meta">
+      {!isReceipt && !isPaymentReceipt && <dl className="document-meta">
         {!isCreditNote && !isPurchaseDebit && <div><dt>{isPaymentReceipt ? "Receipt date" : "Due / valid until"}</dt><dd>{day(isPaymentReceipt ? d.issue_date : d.due_date)}</dd></div>}
         {(isInvoice && gstDoc || !isInvoice && !isPaymentReceipt) && <div><dt>Tax treatment</dt><dd>{treatmentLabel(d)}{d.reverse_charge ? " · reverse charge" : ""} · {d.tax_treatment === "ZERO_RATED" && !d.place_of_supply?.match(/^(0[1-9]|[12]\d|3[0-8])$/) ? "Place of supply outside India" : "State " + d.place_of_supply}</dd></div>}
       </dl>}
     </div>}
-        {isReceipt ? receiptBody : isPaymentReceipt ? paymentReceiptBody : isInvoice ? invoiceBody : standardBody}
+        {isReceipt ? receiptBody : isPaymentReceipt ? paymentReceiptBody : (isInvoice || isProforma) ? invoiceBody : standardBody}
         {compliance}
         {!isPaymentReceipt && <div className="doc-bottom">
       <div>

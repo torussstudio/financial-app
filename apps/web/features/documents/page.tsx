@@ -1,4 +1,6 @@
 import { Search, Eye, Paperclip } from "lucide-react";
+import { useTable } from "../../lib/use-table";
+import { Pager, SortTh } from "../../components/pager";
 import { EntryTable } from "../../components/entry-table";
 import { ActionButton } from "../../components/action-button";
 import { Report } from "../../components/financial-views";
@@ -44,6 +46,7 @@ export function DocumentsPage({ ctx }: Props) {
     value: any,
     currency = "INR"
   ) => new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 2 }).format(Number(value || 0));
+  const t = useTable(filteredDocs || [], 25);
   return <> {page === "documents" && <section className="panel">
       <div className="panel-toolbar">
         <div className="tabs">
@@ -61,27 +64,27 @@ export function DocumentsPage({ ctx }: Props) {
           <input placeholder="Search documents…" value={search} onChange={e => setSearch(e.target.value)}/>
         </div>
       </div>
-      {filteredDocs.length ? <div className="table-scroll">
+      {filteredDocs.length ? <><div className="table-scroll">
         <table>
           <thead>
             <tr>
-              <th>Document</th>
-              <th>Client / vendor</th>
-              <th>Date</th>
+              <SortTh label="Document" k="number" sort={t.sort} toggle={t.toggle}/>
+              <SortTh label="Client / vendor" k="party_name" sort={t.sort} toggle={t.toggle}/>
+              <SortTh label="Date" k="issue_date" sort={t.sort} toggle={t.toggle}/>
               <th>Tax treatment</th>
               <th>Status</th>
-              <th className="right">Total</th>
+              <SortTh label="Total" k="total" className="right" sort={t.sort} toggle={t.toggle}/>
               <th className="right">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {filteredDocs.map((d: Row) => <tr key={d.id}>
+            {t.rows.map((d: Row) => <tr key={d.id}>
               <td>
                 <strong>{d.number}</strong>
                 <small>{d.kind === "BILL" ? "Payment Receipt" : d.kind === "SALES_DEBIT_NOTE" ? "Debit note" : pretty(d.kind)}</small>
               </td>
-              <td>{d.party_name}</td>
-              <td className="muted nowrap">{day(d.issue_date)}</td>
+              <td data-label="Client / vendor">{d.party_name}</td>
+              <td className="muted nowrap" data-label="Date">{day(d.issue_date)}</td>
               <td><span className="tax-tag">{treatmentLabel(d)}</span></td>
               <td>
                 <Badge tone={documentStatus(d) === "Overdue" ? "red" : ["DRAFT", "CANCELLED"].includes(d.status) ? "gray" : ""}>
@@ -89,7 +92,7 @@ export function DocumentsPage({ ctx }: Props) {
                 </Badge>
                 {data.company.einvoice_enabled && einvoiceable(d) && !d.irn && <Badge tone="amber">IRN pending</Badge>}
               </td>
-              <td className="right amount">{documentMoney(d.total, d.currency || "INR")}{d.currency && d.currency !== "INR" && d.total_inr != null && <small>{documentMoney(d.total_inr)}</small>}</td>
+              <td className="right amount" data-label="Total">{documentMoney(d.total, d.currency || "INR")}{d.currency && d.currency !== "INR" && d.total_inr != null && <small>{documentMoney(d.total_inr)}</small>}</td>
               <td>
                 <div className="row-actions">
                   <ActionButton className="icon-btn" title="Preview document" onClick={() => viewDoc(d.id)}>
@@ -98,6 +101,8 @@ export function DocumentsPage({ ctx }: Props) {
                   <button className="icon-btn attach-btn" title="Attachments" onClick={() => ctx.attach("DOCUMENT", d.id, d.number)}>
                     <Paperclip size={15}/>{data.attachmentCounts?.[d.id] ? <span>{data.attachmentCounts[d.id]}</span> : null}
                   </button>
+                  {canWrite && ["INVOICE", "QUOTATION", "PROFORMA"].includes(d.kind) && <ActionButton className="link small" title="Copy into a new draft"
+    onClick={() => api("documents/" + d.id).then((document: Row) => open("document", { duplicate: true, document: { ...document, id: undefined, number: undefined, issue_date: undefined, due_date: undefined, status: "DRAFT", irn: undefined, source_id: undefined } })).catch(fail("Couldn't duplicate " + d.number))}>Duplicate</ActionButton>}
                   {canWrite && d.status === "DRAFT" && <ActionButton className="link small"
     onClick={() => api("documents/" + d.id).then((document: Row) => open("document", { document })).catch(fail("Couldn't open " + d.number + " for editing"))}>Edit</ActionButton>}
                   {canWrite && d.status === "DRAFT" && <ActionButton className="link small" loadingText="Issuing…"
@@ -134,7 +139,7 @@ export function DocumentsPage({ ctx }: Props) {
             </tr>)}
           </tbody>
         </table>
-      </div> : <Empty label="No documents in this view"/>}
+      </div><Pager {...t}/></> : <Empty label="No documents in this view" detail={search ? "Nothing matches “" + search + "”. Clear the search or widen the dates." : "Change the tab, type or date range, or create a new document."}/>}
       <div className="panel-note">Quotations and proformas do not affect revenue. Non-GST views retain the specific tax treatment; zero-rated exports and SEZ supplies have their own view. Debit notes bill an under-charge on an issued invoice and are settled like invoices.{data.company.einvoice_enabled && " E-invoicing is on: download the IRP JSON for each B2B invoice, upload it on the IRP or through your GSP, then record the IRN here."}</div>
     </section>}</>;
 }

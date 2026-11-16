@@ -6,6 +6,8 @@ import {
 } from "lucide-react";
 import { Badge, Empty, Field } from "../components/ui";
 import { ToastViewport, useToasts, type ToastInput } from "../components/toast";
+import { DocShare } from "../components/doc-share";
+import { CommandPalette } from "../components/command-palette";
 import { amountInWords, documentLabel, fileToBase64, gstCharged, localDate, localMonthStart, MAX_ATTACHMENT_BYTES, outstandingOf, RECEIVABLE_KINDS, voucherLabel } from "../lib/format";
 import { PurchasesPage } from "../features/purchases/page";
 import { ItemsPage } from "../features/items/page";
@@ -193,6 +195,9 @@ export default function Page() {
     [preview, setPreview] = useState<Row | null>(null),
     // Printers feed paper slightly off-centre: a per-browser horizontal print offset in mm (negative = move content left).
     [printShift, setPrintShift] = useState("0"),
+    [paletteOpen, setPaletteOpen] = useState(false),
+    [dark, setDark] = useState(false),
+    [confirmLogout, setConfirmLogout] = useState(false),
     [users, setUsers] = useState<Row[]>([]),
     [docLines, setDocLines] = useState<Row[]>([{ description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }]);
   const [formKind, setFormKind] = useState("EXPENSE"),
@@ -212,6 +217,23 @@ export default function Page() {
     [documentCompany, setDocumentCompany] = useState<Row>({}),
     [docPartyId, setDocPartyId] = useState("");
   const modalRef = useRef<HTMLDivElement>(null);
+  const dirtyRef = useRef(false);
+  const logosRef = useRef<{ hash: string; gst_logo: string; non_gst_logo: string } | null>(null);
+  useEffect(() => { try { if (localStorage.getItem("theme") === "dark") setDark(true); } catch {} }, []);
+  useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; try { localStorage.setItem("theme", dark ? "dark" : "light"); } catch {} }, [dark]);
+  const closeRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => { if (dirtyRef.current) { e.preventDefault(); e.returnValue = ""; } };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen(o => !o); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const pendingRequests = useRef(new Map<string, string>());
   const loadSequence = useRef(0);
 
@@ -271,7 +293,12 @@ export default function Page() {
       if (partyFilter) q.set("partyId", partyFilter);
       if (accountFilter) q.set("account", accountFilter);
       const d = await api("overview?" + q);
-      if (sequence === loadSequence.current) { setData(d); setError(""); }
+      // The overview leaves out the (large) logos; fetch them only when they change.
+      let logos = logosRef.current;
+      if (!logos || logos.hash !== d.company?.logo_hash) {
+        try { logos = { hash: d.company?.logo_hash, ...(await api("company/logos")) }; logosRef.current = logos; } catch { /* documents just print without a logo until the next refresh */ }
+      }
+      if (sequence === loadSequence.current) { setData(logos ? { ...d, company: { ...d.company, gst_logo: logos.gst_logo, non_gst_logo: logos.non_gst_logo } } : d); setError(""); }
     } catch (e: any) {
       if (sequence === loadSequence.current) setError(e.message);
     } finally {
@@ -293,7 +320,7 @@ export default function Page() {
       const old = document.activeElement as HTMLElement;
       setTimeout(() => modalRef.current?.querySelector<HTMLElement>("input,select,button")?.focus(), 0);
       const fn = (e: KeyboardEvent) => {
-        if (e.key === "Escape" && !busy) { setModal(null); setPreview(null); }
+        if (e.key === "Escape" && !busy) { if (modal) closeRef.current(); else setPreview(null); }
         if (e.key === "Tab") {
           const els = Array.from(modalRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]),input,select,textarea,a[href]') || []).filter(el => el.offsetParent !== null);
           if (!els.length) return;
@@ -316,6 +343,14 @@ export default function Page() {
       setError("");
     }
   }, [modal]);
+
+  // Closing a half-filled form asks first, so a stray Esc or backdrop click never throws work away.
+  function requestClose() {
+    if (modal && dirtyRef.current && !window.confirm("You have unsaved changes. Discard them?")) return;
+    dirtyRef.current = false;
+    setModal(null);
+  }
+  closeRef.current = requestClose;
 
   function go(p: string) {
     setPage(p);
@@ -361,6 +396,7 @@ export default function Page() {
       setDocLines(extra.document.lines.map((l: Row) => ({ ...l, price: String(l.price), quantity: String(l.quantity), taxRate: String(l.taxRate), hsn: l.hsn || "" })));
     else if (type === "salesDebitNote")
       setDocLines([{ description: "", quantity: "1", price: "", taxRate: String(extra.document?.lines?.[0]?.taxRate ?? "18"), hsn: extra.document?.lines?.[0]?.hsn || "" }]);
+    dirtyRef.current = false;
     setModal({ type, ...extra });
   }
 
@@ -532,8 +568,8 @@ export default function Page() {
             currency: "INR",
             lines: docLines.map(l => ({ description: l.description, hsn: l.hsn || "", quantity: String(l.quantity), price: String(l.price), taxRate: taxTreatment === "TAXABLE" ? String(l.taxRate || 0) : "0" }))
           };
-          const r = await perform(modal.document ? "documents/" + modal.document.id : "documents", payload, modal.document ? "PATCH" : "POST", {
-            title: modal.document ? "Vendor bill updated" : "Vendor bill saved as draft",
+          const r = await perform(modal.document?.id ? "documents/" + modal.document.id : "documents", payload, modal.document?.id ? "PATCH" : "POST", {
+            title: modal.document?.id ? "Vendor bill updated" : "Vendor bill saved as draft",
             description: f.reference + " · " + money(payload.reverseCharge ? draftInvoiceTotals.subtotal : draftInvoiceTotals.total) + (payload.reverseCharge ? " payable to the supplier; " + money(draftInvoiceTotals.tax) + " GST under reverse charge" : "") + ". Post it to record the payable."
           });
           await attachAfterSave(file, "DOCUMENT", r?.id, "Vendor bill");
@@ -581,11 +617,12 @@ export default function Page() {
             company: isReceipt ? { ...documentCompany, profile: taxTreatment } : taxTreatment === "OUTSIDE_GST" ? documentCompany : undefined,
             lines: docLines
           };
-          const path = modal.document ? "documents/" + modal.document.id : "documents";
+          const editing = Boolean(modal.document?.id);
+          const path = editing ? "documents/" + modal.document.id : "documents";
           const label = documentLabel(newDocKind), who = clientInfo.name || "the client";
           // Invoices and payment receipts are numbered on issue, so a new draft has no number worth showing yet.
           const numberedOnIssue = ["INVOICE", "BILL"].includes(newDocKind);
-          await perform(path, payload, modal.document ? "PATCH" : "POST", (r: Row) => modal.document
+          await perform(path, payload, editing ? "PATCH" : "POST", (r: Row) => editing
             ? { title: label + " updated", description: "Changes to " + (numberedOnIssue ? "the draft for " + who : (r?.number || modal.document.number) + " · " + who) + " are saved." }
             : { title: label + " draft saved", description: numberedOnIssue ? who + " · a number is assigned when you issue it." : [r?.number, who].filter(Boolean).join(" · ") });
           break;
@@ -732,6 +769,7 @@ export default function Page() {
           break;
         }
       }
+      dirtyRef.current = false;
       setModal(null);
     } catch (e: any) {
       setError(e.message);
@@ -838,7 +876,7 @@ export default function Page() {
 
   if (!authReady) return <div className="loading-page"><div className="logo-mark">l<span>.</span></div><p>Opening your workspace…</p></div>;
   if (!session) return <LoginScreen error={error} busy={busy} demoLogin={demoLogin} onLogin={submitLogin} onDemo={openDemo} />;
-  if (!data) return <div className="loading-page"><div className="logo-mark">l<span>.</span></div><p>{error || "Preparing your accounts…"}</p>{error && <ActionButton className="btn" loading={loading} loadingText="Retrying…" onClick={refresh}>Retry</ActionButton>}</div>;
+  if (!data) return <div className="loading-page"><div className="logo-mark">l<span>.</span></div>{!error && <div className="skeleton-stack" aria-hidden="true"><i/><i/><i/></div>}<p>{error || "Preparing your accounts…"}</p>{error && <ActionButton className="btn" loading={loading} loadingText="Retrying…" onClick={refresh}>Retry</ActionButton>}</div>;
 
   const metric = data.metrics,
     active = navigation.find(n => n[0] === page),
@@ -874,7 +912,7 @@ export default function Page() {
   }
 
   const entryModalContext = {
-    modal, setModal, modalRef, busy, error, submit, Field, bankSelect, bankForTreatment, partySelect, catSelect,
+    modal, setModal: (m: Row | null) => m === null ? requestClose() : setModal(m), markDirty: () => { dirtyRef.current = true; }, modalRef, busy, error, submit, Field, bankSelect, bankForTreatment, partySelect, catSelect,
     voucherCategoryItems, addVoucherCategory,
     formKind, setFormKind, today, pretty, data, newDocKind, setNewDocKind, taxTreatment, setTaxTreatment,
     docLines, setDocLines, placeOfSupply, setPlaceOfSupply, manualSupplyMode, setManualSupplyMode,
@@ -889,7 +927,7 @@ export default function Page() {
 
   const pageContext = {
     page, data, metric, money, short, day, pretty, palette, accounts, go, setAccountFilter, bankLabel,
-    documentStatus, outstanding, canWrite, viewReceipt, viewDoc, open, Empty, taxTab, setTaxTab,
+    printShift, setPrintShift, documentStatus, outstanding, canWrite, viewReceipt, viewDoc, open, Empty, taxTab, setTaxTab,
     docKind, setDocKind, search, setSearch, filteredDocs, perform, from, to, partyFilter, accountFilter,
     loading, busy, setError, notify, fail, report, setReport, Field, users, setUsers, api, session, setModal, EntryTable, Report,
     Badge, today, exportCSV, exportRows, txs, filter, active, partySelect, bankSelect, catSelect,
@@ -905,7 +943,7 @@ export default function Page() {
       outstandingCount={outstanding.length}
       billsDueCount={billsDue.length}
       onNavigate={go}
-      onLogout={() => perform("auth/logout", {}, "POST", null, "Couldn't sign out").then(() => setSession(null)).catch(() => {})}
+      onLogout={() => setConfirmLogout(true)}
     />
     {mobile && <SidebarCover onClose={() => setMobile(false)} />}
     <div className="main-shell">
@@ -915,6 +953,9 @@ export default function Page() {
         demo={Boolean(data.company.demo)}
         hasOutstanding={outstanding.length > 0}
         onOpenMenu={() => setMobile(true)}
+        onSearch={() => setPaletteOpen(true)}
+        dark={dark}
+        onToggleTheme={() => setDark(d => !d)}
         onOutstanding={() => { go("documents"); setDocKind("INVOICE") }}
       />
       <main>
@@ -962,6 +1003,9 @@ export default function Page() {
           </div>
           <button className="filter-chip" onClick={() => { setFrom(monthStart()); setTo(today()) }}>This month</button>
           <button className="filter-chip" onClick={() => { setFrom(monthStart(-5)); setTo(today()) }}>6 months</button>
+          <button className="filter-chip" onClick={() => { setFrom(monthStart(-1)); setTo(localDate(-new Date().getDate())) }}>Last month</button>
+          <button className="filter-chip" onClick={() => { const n = new Date(); const y = n.getMonth() >= 3 ? n.getFullYear() : n.getFullYear() - 1; setFrom(y + "-04-01"); setTo(today()) }}>This FY</button>
+          <button className="filter-chip" onClick={() => { const n = new Date(); const y = (n.getMonth() >= 3 ? n.getFullYear() : n.getFullYear() - 1) - 1; setFrom(y + "-04-01"); setTo((y + 1) + "-03-31") }}>Last FY</button>
           <select aria-label="Filter by client or vendor" value={partyFilter} onChange={e => setPartyFilter(e.target.value)}>
             <option value="">All clients & vendors</option>
             {data.parties.map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -987,6 +1031,18 @@ export default function Page() {
         </footer>
       </main>
     </div>
+    <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} documents={data?.documents || []} parties={data?.parties || []} entries={data?.entries || []}
+      onDoc={id => viewDoc(id)} onParty={() => go("parties")} onEntry={() => go("ledger")} />
+    {confirmLogout && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !busy) setConfirmLogout(false); }} onKeyDown={e => { if (e.key === "Escape") setConfirmLogout(false); }}>
+      <div role="alertdialog" aria-modal="true" aria-labelledby="logout-title" className="modal" style={{ width: 400 }}>
+        <div className="modal-heading"><div><h2 id="logout-title">Sign out?</h2></div></div>
+        <p className="fine" style={{ margin: 0 }}>You'll need to sign in again to reach your accounts.</p>
+        <div className="modal-actions">
+          <button className="btn" autoFocus onClick={() => setConfirmLogout(false)}>Cancel</button>
+          <ActionButton className="btn primary" loadingText="Signing out…" onClick={() => perform("auth/logout", {}, "POST", null, "Couldn't sign out").then(() => { setConfirmLogout(false); setSession(null); }).catch(() => {})}>Sign out</ActionButton>
+        </div>
+      </div>
+    </div>}
     <ToastViewport toasts={toasts} onDismiss={dismiss} />
     <WorkspaceEntryModal context={entryModalContext} />
     {preview && <div className="modal-backdrop print-backdrop">
@@ -999,6 +1055,7 @@ export default function Page() {
           <ActionButton className="btn" loadingText="Preparing PDF…" onClick={async () => { await Promise.all(Array.from(document.querySelectorAll<HTMLImageElement>(".document-page img")).map(img => img.decode().catch(() => {}))); window.print(); }}><Printer size={16} />Print / Save PDF</ActionButton>
           <button className="icon-btn" aria-label="Close preview" onClick={() => setPreview(null)}><X size={20} /></button>
         </div>
+        {preview.view === "document" && <DocShare d={preview} company={data.company} money={money} outstandingOf={outstandingOf} today={today()} />}
         <DocumentPreview d={preview} />
       </div>
     </div>}

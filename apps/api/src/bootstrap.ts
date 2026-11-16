@@ -76,7 +76,7 @@ export async function bootstrap(
     } if (!(await one(q, "SELECT id FROM users LIMIT 1")))
     await q.query(
       "INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,'Administrator',$3,'ADMIN')",
-      [id(), config.email.toLowerCase(), hashPassword(config.password)]
+      [id(), config.email.toLowerCase(), await hashPassword(config.password)]
     ); });
   const company = await one(db, "SELECT * FROM company");
   if (company?.demo !== config.demo)

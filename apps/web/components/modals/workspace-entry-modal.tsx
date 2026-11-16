@@ -199,7 +199,7 @@ export function WorkspaceEntryModal({ context }: {
     attachments: "Attachments" + (modal.title ? " · " + modal.title : ""),
     voucher: "New daily voucher",
     capital: "Record funding movement",
-    document: modal.document ? "Edit document" : "Create a document",
+    document: modal.duplicate ? "Duplicate document" : modal.document ? "Edit document" : "Create a document",
     payment: paymentDirection === "PAYMENT" ? "Pay a vendor" : "Record a receipt",
     budget: "Set a monthly budget",
     recurring: "New recurring entry",
@@ -232,7 +232,15 @@ export function WorkspaceEntryModal({ context }: {
         <datalist id="item-options">
           {items.map(i => <option key={i.id} value={i.name}>{[i.hsn && "HSN/SAC " + i.hsn, Number(i.rate) > 0 && money(i.rate), i.tax_rate + "% GST"].filter(Boolean).join(" · ")}</option>)}
         </datalist>
-        <form onSubmit={submit}>
+        <form onSubmit={submit} onInput={() => context.markDirty?.()} onKeyDown={e => {
+          // Enter on the last line's price adds the next row instead of submitting half a document.
+          const t = e.target as HTMLInputElement, m = /^Line (\d+) price$/.exec(t.getAttribute?.("aria-label") || "");
+          if (e.key === "Enter" && m && Number(m[1]) === docLines.length && (newDocKind === "BILL" || docCanAddItem)) {
+            e.preventDefault();
+            setDocLines([...docLines, { description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }]);
+            setTimeout(() => document.querySelector<HTMLInputElement>('input[aria-label="Line ' + (docLines.length + 1) + ' description"]')?.focus(), 30);
+          }
+        }}>
           <div className="form-grid">
  {modal.type === "party" && <><Field label="Client / vendor name" wide><input name="name" required minLength={2} defaultValue={modal.party?.name || ""}/></Field><Field label="Contact name"><input name="contactName" defaultValue={modal.party?.contact_name || ""}/></Field><Field label="Type">
                 <select name="kind" defaultValue={modal.party?.kind || modal.kind || "CLIENT"}>

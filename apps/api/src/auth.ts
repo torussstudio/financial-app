@@ -1,19 +1,24 @@
-import { randomBytes, scryptSync, timingSafeEqual, createHash } from "node:crypto";
+import { randomBytes, scrypt as scryptCb, timingSafeEqual, createHash } from "node:crypto";
+import { promisify } from "node:util";
+// Async scrypt keeps the event loop free while a password is hashed or checked.
+const scrypt = promisify(scryptCb) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
+// Checked when the e-mail is unknown so a wrong e-mail and a wrong password take the same time.
+export const DUMMY_HASH = "00112233445566778899aabbccddeeff:" + "0".repeat(128);
 import type { Database, Row } from "./db.js";
 import { one } from "./db.js";
 import { need, type Actor } from "./accounting.js";
 import type { Request, Response } from "express";
 export const digest = (s: string) => createHash("sha256").update(s).digest("hex");
-export function hashPassword(password: string) {
+export async function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
-  return salt + ":" + scryptSync(password, salt, 64).toString("hex");
+  return salt + ":" + (await scrypt(password, salt, 64)).toString("hex");
 }
-export function verifyPassword(
+export async function verifyPassword(
   password: string,
   stored: string
 ) {
   const [salt, hash] = stored.split(":");
-  const actual = scryptSync(password, salt, 64), expected = Buffer.from(hash, "hex");
+  const actual = await scrypt(password, salt, 64), expected = Buffer.from(hash, "hex");
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 export async function login(
@@ -21,6 +26,8 @@ export async function login(
   res: Response,
   user: Row
 ) {
+  // Expired sessions are swept as people sign in, so the table never grows without bound.
+  await db.query("DELETE FROM sessions WHERE expires_at<now()");
   const token = randomBytes(32).toString("hex"), csrf = randomBytes(24).toString("hex");
   await db.query(
     "INSERT INTO sessions(id,user_id,csrf,expires_at) VALUES($1,$2,$3,$4)",

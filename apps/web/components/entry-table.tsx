@@ -1,6 +1,8 @@
 import { ArrowUpRight, ArrowDownLeft, Paperclip, Printer } from "lucide-react";
 import { Badge, Empty } from "./ui";
 import { ActionButton } from "./action-button";
+import { useTable } from "../lib/use-table";
+import { Pager, SortTh } from "./pager";
 import { day, money, pretty, type Row } from "../lib/format";
 const OUT = ["EXPENSE", "REIMBURSEMENT", "ASSET", "PAYMENT", "CREDIT_NOTE", "PURCHASE"];
 export function EntryTable({ rows, compact = false, canWrite, onReceipt, onReverse, onAttach, attachmentCounts = {} }: {
@@ -12,20 +14,22 @@ export function EntryTable({ rows, compact = false, canWrite, onReceipt, onRever
   onAttach?: (entry: Row) => void;
   attachmentCounts?: Record<string, number>;
 }) {
-  return rows.length ? <div className="table-scroll">
+  const t = useTable(rows, compact ? 1000 : 25);
+  return rows.length ? <><div className="table-scroll">
     <table>
       <thead>
         <tr>
-          <th>Transaction</th>
-          <th>Date</th>
-          <th>Type</th>
-          <th className="right">Amount</th>
+          {compact ? <><th>Transaction</th><th>Date</th><th>Type</th><th className="right">Amount</th></> : <>
+            <SortTh label="Transaction" k="description" sort={t.sort} toggle={t.toggle}/>
+            <SortTh label="Date" k="entry_date" sort={t.sort} toggle={t.toggle}/>
+            <th>Type</th>
+            <SortTh label="Amount" k="amount" className="right" sort={t.sort} toggle={t.toggle}/></>}
           {!compact && <th className="right">Actions</th>}
         </tr>
       </thead>
       <tbody>
-        {rows.map(e => <tr key={e.id}>
-          <td>
+        {t.rows.map(e => <tr key={e.id}>
+          <td data-label="Transaction">
             <div className="cell-title">
               <span className={"entry-icon " + (OUT.includes(e.kind) ? "out" : "")}>
                 {OUT.includes(e.kind) ? <ArrowUpRight size={16}/> : <ArrowDownLeft size={16}/>}
@@ -57,5 +61,5 @@ export function EntryTable({ rows, compact = false, canWrite, onReceipt, onRever
         </tr>)}
       </tbody>
     </table>
-  </div> : <Empty />;
+  </div><Pager {...t}/></> : <Empty />;
 }

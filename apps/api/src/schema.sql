@@ -195,3 +195,18 @@ CREATE TABLE IF NOT EXISTS gst_filings(id text PRIMARY KEY,period text NOT NULL 
 DROP TRIGGER IF EXISTS immutable_gst_filings ON gst_filings;
 CREATE TRIGGER immutable_gst_filings BEFORE UPDATE OR DELETE ON gst_filings FOR EACH ROW EXECUTE FUNCTION immutable_financial_record();
 INSERT INTO schema_versions(version) VALUES(4) ON CONFLICT DO NOTHING;
+
+-- Version 5: read-path indexes. Additive and idempotent; they speed up ledger, party, document and audit lookups.
+CREATE INDEX IF NOT EXISTS journal_lines_account ON journal_lines(account_code,entry_id);
+CREATE INDEX IF NOT EXISTS journal_entries_party ON journal_entries(party_id,entry_date);
+CREATE INDEX IF NOT EXISTS journal_entries_project ON journal_entries(project_id) WHERE project_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS documents_party ON documents(party_id);
+CREATE INDEX IF NOT EXISTS documents_issue_date ON documents(issue_date);
+CREATE INDEX IF NOT EXISTS documents_kind_status ON documents(kind,status);
+CREATE INDEX IF NOT EXISTS documents_project ON documents(project_id) WHERE project_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS allocations_document ON allocations(document_id);
+CREATE INDEX IF NOT EXISTS audit_events_created ON audit_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_events_entity ON audit_events(entity_id);
+CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS bank_lines_account_date ON bank_statement_lines(account_code,entry_date DESC);

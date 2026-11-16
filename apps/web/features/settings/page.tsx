@@ -8,9 +8,17 @@ type Props = {
   ctx: any
 };
 export function SettingsPage({ ctx }: Props) {
-  const { page, data, day, pretty, busy, fail, notify, open, perform, users, setUsers, api, session, Badge, } = ctx;
+  const { page, data, day, pretty, busy, fail, notify, open, perform, users, setUsers, api, session, Badge, printShift, setPrintShift } = ctx;
   const filter: (rows: Row[]) => Row[] = ctx.filter;
   return <> {page === "settings" && <div className="settings-grid">
+      <section className="panel">
+        <div className="panel-heading">
+          <div><h2>Print alignment</h2><p>If printouts sit off-centre, shift them sideways. Saved on this browser.</p></div>
+        </div>
+        <label className="print-shift-setting">Shift (mm) — negative moves left, positive moves right
+          <input type="number" step="0.5" min="-10" max="10" value={printShift} onChange={e => { setPrintShift(e.target.value); try { localStorage.setItem("printShiftX_v2", e.target.value); } catch {} }} />
+        </label>
+      </section>
       <section className="panel">
         <div className="panel-heading">
           <div><h2>Company profile</h2><p>One company, one set of accounts</p></div>

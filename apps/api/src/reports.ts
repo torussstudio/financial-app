@@ -70,9 +70,9 @@ export async function getReport(
     ),
     db.query("SELECT * FROM accounts ORDER BY code"),
     db.query("SELECT p.*,a.name AS party_name FROM projects p LEFT JOIN parties a ON a.id=p.party_id ORDER BY p.archived,p.name"),
-    db.query("SELECT *,closed_through::text,lut_valid_from::text,lut_valid_to::text FROM company WHERE id='company'"),
+    db.query("SELECT *,md5(coalesce(gst_logo,'')||coalesce(non_gst_logo,'')) AS logo_hash,closed_through::text,lut_valid_from::text,lut_valid_to::text FROM company WHERE id='company'"),
     db.query(
-      "SELECT b.*,a.name,COALESCE((SELECT SUM(l.debit-l.credit) FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id WHERE l.account_code=b.account_code AND to_char(e.entry_date,'YYYY-MM')=b.month),0)::text AS actual FROM budgets b JOIN accounts a ON a.code=b.account_code WHERE month=$1",
+      "SELECT b.*,a.name,COALESCE((SELECT SUM(l.debit-l.credit) FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id WHERE l.account_code=b.account_code AND e.entry_date>=(b.month||'-01')::date AND e.entry_date<(b.month||'-01')::date+interval '1 month'),0)::text AS actual FROM budgets b JOIN accounts a ON a.code=b.account_code WHERE month=$1",
       [month]
     ),
     db.query(
@@ -147,7 +147,7 @@ export async function getReport(
   });
   return {
     categoryLines,
-    company: company.rows[0],
+    company: { ...company.rows[0], gst_logo: "", non_gst_logo: "" },
     metrics: {
       income: income.toFixed(2),
       expenses: expense.toFixed(2),
