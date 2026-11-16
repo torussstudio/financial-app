@@ -147,3 +147,56 @@
   .document-page .doc-compliance{margin:8px 0 0;padding-top:6px}
   .document-page[data-density="roomy"] .document-table td{padding-top:6px;padding-bottom:6px}
 }
+
+/* Adaptive page: few items = airy rows, footer (bank/notes) pinned to the page bottom; many items = compact */
+@media print{
+  .document-page:not(.payment-receipt-preview){display:flex;flex-direction:column;min-height:296mm}
+  .document-page:not(.payment-receipt-preview) .doc-bottom{margin-top:auto}
+  .document-page[data-density="airy"] .document-table-scroll .document-table td{padding-top:12px;padding-bottom:12px;font-size:10px}
+  .document-page[data-density="airy"] .document-table-scroll .document-table th{font-size:9px;padding-top:10px;padding-bottom:10px}
+  .document-page[data-density="airy"] .document-parties{margin:20px 0 18px}
+  .document-page[data-density="airy"] .doc-totals{margin-top:18px}
+  .document-page[data-density="airy"] .doc-totals>div{padding:6px 12px}
+  .document-page[data-density="roomy"] .document-table-scroll .document-table td{font-size:9.5px}
+}
+
+/* Bank details in black; bigger logo */
+.document-page .doc-bottom p,.document-page .doc-bottom p span,.document-page .bank-fields strong,.document-page .bank-fields span{color:#111!important}
+.document-page .bank-fields strong{font-weight:650}
+.document-page .doc-bottom small{color:#111;font-weight:700}
+.document-page .doc-logo{max-width:260px;max-height:88px}
+@media print{.document-page .doc-logo{max-width:260px;max-height:88px;margin-bottom:10px}}
+
+/* Quotation / proforma / credit & debit notes use the 4-5 column table: wide description column too */
+.document-page .standard-table{table-layout:fixed;width:100%;min-width:0}
+.document-page .standard-table th:first-child,.document-page .standard-table td:first-child{width:46%;white-space:normal;overflow-wrap:anywhere;text-align:left}
+.document-page .standard-table td:nth-child(2){min-width:0;white-space:nowrap}
+.document-page .standard-table td,.document-page .standard-table th{white-space:normal;padding-left:3px;padding-right:3px}
+.document-page .standard-table td small{display:block}
+@media print{
+  .document-page .standard-table{font-size:9px}
+  .document-page[data-density="airy"] .standard-table td{padding-top:12px;padding-bottom:12px;font-size:10px}
+}
+
+/* Boxed, centred A4 layout */
+.document-page:not(.payment-receipt-preview){padding:10mm}
+.document-page .doc-frame{border:1.2px solid var(--doc-accent,#111);padding:9mm 9mm 8mm;display:flex;flex-direction:column;min-height:277mm}
+.document-page .doc-frame>.doc-bottom{margin-top:auto}
+.document-page .document-head{border-bottom:2px solid var(--doc-accent,#111)}
+.document-page .document-head>div:first-child p{font-weight:700;color:#111}
+.document-page .document-title .doc-date{font-weight:700;color:#111}
+.document-page .doc-logo.gst-logo{max-width:340px;max-height:120px}
+@media print{
+  .document-page:not(.payment-receipt-preview){display:block;min-height:0;padding:10mm}
+  .document-page .doc-frame{min-height:276mm;break-inside:avoid}
+  .document-page .doc-logo.gst-logo{max-width:340px;max-height:120px}
+}
+@media screen{.document-page .doc-frame{min-height:0}}
+.payment-receipt-preview .doc-frame{border:0;padding:0;min-height:0;display:block}
+.document-page.non-gst-doc .doc-bottom p,.document-page.non-gst-doc .bank-fields span,.document-page.non-gst-doc .bank-fields strong{font-weight:700}
+
+/* Bank details: the key block of the invoice, so larger and darker */
+.document-page .doc-bottom small{font-size:10px;letter-spacing:1.6px;color:#000;font-weight:800}
+.document-page .doc-bottom .bank-fields{margin-top:6px;padding:8px 12px;background:#f6f6f6;border:1px solid #000}
+.document-page .doc-bottom .bank-fields p,.document-page .doc-bottom .bank-fields span,.document-page .doc-bottom .bank-fields strong{font-size:12.5px;line-height:1.5;color:#000!important;font-weight:700;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+.document-page .doc-bottom .bank-fields p{margin:3px 0}

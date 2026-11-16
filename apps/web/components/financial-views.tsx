@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import qrcode from "qrcode-generator";
 import { Badge, Empty } from "./ui";
 import { amountInWords, day, docLineCost, gstCharged, inrTotal, money, outstandingOf, pretty, RECEIVABLE_KINDS, treatmentLabel, type Row } from "../lib/format";
@@ -317,6 +318,31 @@ export function Report({ data, type, to, from }: {
       </table>
     </div></>;
 }
+// Dominant ink colour of a logo (ignores transparent and near-white pixels): used to tint the non-GST document's divider and frame.
+function logoAccent(src: string): Promise<string> {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas"); c.width = c.height = 64;
+        const g = c.getContext("2d"); if (!g) return resolve("");
+        g.drawImage(img, 0, 0, 64, 64);
+        const px = g.getImageData(0, 0, 64, 64).data, buckets: Record<string, { n: number; r: number; g: number; b: number }> = {};
+        for (let i = 0; i < px.length; i += 4) {
+          if (px[i + 3] < 128 || (px[i] > 235 && px[i + 1] > 235 && px[i + 2] > 235)) continue;
+          const k = (px[i] >> 5) + "," + (px[i + 1] >> 5) + "," + (px[i + 2] >> 5);
+          const b = buckets[k] || (buckets[k] = { n: 0, r: 0, g: 0, b: 0 });
+          b.n++; b.r += px[i]; b.g += px[i + 1]; b.b += px[i + 2];
+        }
+        const top = Object.values(buckets).sort((a, z) => z.n - a.n)[0];
+        resolve(top ? "#" + [top.r, top.g, top.b].map(v => Math.round(v / top.n).toString(16).padStart(2, "0")).join("") : "");
+      } catch { resolve(""); }
+    };
+    img.onerror = () => resolve("");
+    img.src = src;
+  });
+}
 export function DocumentPreview({ d }: {
   d: Row
 }) {
@@ -330,6 +356,13 @@ export function DocumentPreview({ d }: {
     gst = gstDoc && gstCharged(d.tax_treatment, d.zero_rated_type);
   const company = d.company || {}, party = d.party || {}, lines: Row[] = d.lines || [];
   const documentLogo = isReceipt ? "" : gstDoc ? company.gst_logo : company.non_gst_logo;
+  const [logoColor, setLogoColor] = useState("");
+  useEffect(() => {
+    let live = true;
+    if (!gstDoc && documentLogo) logoAccent(documentLogo).then(c => { if (live) setLogoColor(c); }); else setLogoColor("");
+    return () => { live = false; };
+  }, [gstDoc, documentLogo]);
+  const accent = gstDoc ? "#111111" : logoColor || "#111111";
   const docMoney = (value: any) => new Intl.NumberFormat(
     "en-IN",
     { style: "currency", currency: d.currency || "INR", maximumFractionDigits: 2 }
@@ -464,7 +497,7 @@ export function DocumentPreview({ d }: {
       <div><span>Balance Payable</span><strong>{docMoney(Math.max(0, total - settled))}</strong></div>
       <div className="grand-total"><span>Total</span><strong>{docMoney(total)}</strong></div>
     </div>{gst && d.tax_reason && <p className="doc-note">Tax treatment basis: {d.tax_reason}</p>}</>;
-  const standardBody = <><table className="document-table">
+  const standardBody = <><table className="document-table standard-table">
       <thead>
         <tr>
           <th>Description</th>
@@ -524,13 +557,14 @@ export function DocumentPreview({ d }: {
     </div>}
   </div> : null;
   const usedLines = lines.reduce((n: number, l: any) => n + docLineCost(l.description, l.hsn), 0);
-  const density = usedLines <= 10 ? "roomy" : usedLines <= 15 ? "snug" : "tight";
-  return <article data-density={density} className={"document-page" + (isPaymentReceipt ? " payment-receipt-preview" : "")}>
+  const density = usedLines <= 5 ? "airy" : usedLines <= 10 ? "roomy" : usedLines <= 15 ? "snug" : "tight";
+  return <article data-density={density} style={{ ["--doc-accent" as any]: accent }} className={"document-page" + (gstDoc ? "" : " non-gst-doc") + (isPaymentReceipt ? " payment-receipt-preview" : "")}>
+      <div className="doc-frame">
         {company.demo && <div className="document-watermark">DEMONSTRATION · NOT A LEGAL TAX DOCUMENT</div>}
         {isPaymentReceipt && <header className="payment-receipt-company"><h2>{company.name}</h2>{companyAddress.map((line: string, i: number) => <p key={i}>{line}</p>)}{company.profile === "TAXABLE" && company.gstin && <p>GSTIN: {company.gstin}</p>}<p>Contact: {company.contact_number || company.contact || company.phone || ""} / {company.email || ""}</p></header>}
         {!isPaymentReceipt && <div className="document-head">
       <div>
-        {documentLogo ? <img className="doc-logo" src={documentLogo} alt={gstDoc ? "GST company logo" : "Non-GST company logo"}/> : <><div className="doc-emblem">L.</div>
+        {documentLogo ? <img className={"doc-logo" + (gstDoc ? " gst-logo" : "")} src={documentLogo} alt={gstDoc ? "GST company logo" : "Non-GST company logo"}/> : <><div className="doc-emblem">L.</div>
         <h2>{company.name}</h2></>}
         {(companyAddress.length ? companyAddress : ["Company address not configured"]).map((line: string, i: number) => <p key={i}>{line}</p>)}
         {((isInvoice && gstDoc) || isPaymentReceipt) && company.state_code && <p>State code: {company.state_code}</p>}
@@ -542,7 +576,7 @@ export function DocumentPreview({ d }: {
         <strong>{d.status === "DRAFT" ? String(d.number).replace(/^DRAFT-/, String(title).toUpperCase().replace(/\s+/g, "-") + "-") : d.number}</strong>
         {d.source_number && (isCreditNote || isSalesDebit) && <p>Against invoice {d.source_number}{d.source_date ? " dated " + day(d.source_date) : ""}</p>}
         {d.source_number && isPurchaseDebit && <p>Against your bill {d.source_reference || d.source_number}{d.source_date ? " dated " + day(d.source_date) : ""}</p>}
-        <p>{day(isReceipt ? d.entry_date : d.issue_date)}</p>
+        <p className="doc-date">{day(isReceipt ? d.entry_date : d.issue_date)}</p>
         {!isReceipt && d.status !== "DRAFT" && <span>{d.status === "CANCELLED" ? "CANCELLED" : "ISSUED"}</span>}
       </div>
     </div>}
@@ -580,6 +614,6 @@ export function DocumentPreview({ d }: {
       </div>
       {!isPaymentReceipt && !isInvoice && !isCreditNote && <div><small>TERMS</small><p>{company.terms}</p></div>}
     </div>}
-    {!isPaymentReceipt && <div className="document-end">Thank you for your business.</div>}
+    </div>
     </article>;
 }
