@@ -41,6 +41,7 @@ export function WorkspaceEntryModal({ context }: {
     supplyStateKnown,
     draftInterstate,
     draftInvoiceTotals,
+    draftDiscount, docDiscount, setDocDiscount, discountMode, setDiscountMode,
     draftPaymentTotal,
     amountInWords,
     money,
@@ -155,7 +156,7 @@ export function WorkspaceEntryModal({ context }: {
   const docLines: Row[] = context.docLines;
   // A document must stay on one A4 page: at most 10 items, within a shared budget of printed description lines.
   const docUsedLines = docLines.reduce((n, l) => n + docLineCost(l.description, l.hsn), 0);
-  const docLinesBudget = docLineBudget(docLines.length);
+  const docLinesBudget = docLineBudget(docLines.length) - (draftDiscount > 0 ? (gstCharged(taxTreatment, zeroRatedType) ? 2 : 1) : 0);
   const docCanAddItem = docLines.length < DOC_MAX_ITEMS && docUsedLines + 1 <= docLineBudget(docLines.length + 1);
   // Lines carry a GST rate on taxable and zero-rated documents (under LUT it is reported in GSTR-1 but not charged).
   const rateColumn = taxTreatment === "TAXABLE" || taxTreatment === "ZERO_RATED";
@@ -575,6 +576,13 @@ export function WorkspaceEntryModal({ context }: {
                   {docLines.length}/{DOC_MAX_ITEMS} items · {docUsedLines}/{docLinesBudget} printed lines used. {docUsedLines > docLinesBudget ? "Too much text to fit one page: shorten a description." : "Items and descriptions share one A4 page."}
                 </small>}
               </div>{newDocKind === "BILL" && <div className="wide form-note receipt-live-total">
+                <label className="discount-row">
+                  <span>Discount <small>(optional, before GST)</small></span>
+                  <span className="discount-inputs">
+                    <select aria-label="Discount type" value={discountMode} onChange={e => setDiscountMode(e.target.value as "AMOUNT" | "PERCENT")}><option value="AMOUNT">₹ Amount</option><option value="PERCENT">% Percent</option></select>
+                    <input aria-label="Discount" type="number" min="0" step="0.01" max={discountMode === "PERCENT" ? 100 : undefined} placeholder="0" value={docDiscount} onChange={e => setDocDiscount(e.target.value)} />
+                  </span>
+                </label>
                 <strong>Amount Received: {money(draftPaymentTotal)}</strong>
                 <span>Amount in Words: {amountInWords(draftPaymentTotal)}</span>
               </div>}{newDocKind !== "BILL" && <div className="wide">
@@ -585,8 +593,16 @@ export function WorkspaceEntryModal({ context }: {
                     <small>Tax breakdown follows the selected GST treatment</small>
                   </div>
                 </div>
+                <label className="discount-row">
+                  <span>Discount <small>(optional, before GST)</small></span>
+                  <span className="discount-inputs">
+                    <select aria-label="Discount type" value={discountMode} onChange={e => setDiscountMode(e.target.value as "AMOUNT" | "PERCENT")}><option value="AMOUNT">₹ Amount</option><option value="PERCENT">% Percent</option></select>
+                    <input aria-label="Discount" type="number" min="0" step="0.01" max={discountMode === "PERCENT" ? 100 : undefined} placeholder="0" value={docDiscount} onChange={e => setDocDiscount(e.target.value)} />
+                  </span>
+                </label>
                 <div className="document-form-totals">
-                  <div><span>Subtotal</span><strong>{docMoney(draftInvoiceTotals.subtotal)}</strong></div>
+                  <div><span>Subtotal</span><strong>{docMoney(draftInvoiceTotals.grossSubtotal)}</strong></div>
+                  {draftInvoiceTotals.discount > 0 && <><div><span>Discount</span><strong>− {docMoney(draftInvoiceTotals.discount)}</strong></div>{gstCharged(taxTreatment, zeroRatedType) && <div><span>Taxable value</span><strong>{docMoney(draftInvoiceTotals.subtotal)}</strong></div>}</>}
                   {gstCharged(taxTreatment, zeroRatedType) && (draftInterstate === true ? <div><span>IGST</span><strong>{docMoney(draftInvoiceTotals.igst)}</strong></div> : draftInterstate === false ? <><div><span>CGST</span><strong>{docMoney(draftInvoiceTotals.cgst)}</strong></div><div><span>SGST</span><strong>{docMoney(draftInvoiceTotals.sgst)}</strong></div></> : <div><span>GST</span><strong>Select a tax calculation</strong></div>)}
                   <div>
                     <span>Advance status</span>

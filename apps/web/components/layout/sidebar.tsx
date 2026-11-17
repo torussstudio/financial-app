@@ -47,7 +47,7 @@ type Props = {
 const pretty = (value: string) => value.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 export function Sidebar({ company, user, page, mobile, outstandingCount, billsDueCount = 0, onNavigate, onLogout }: Props) {
   return <aside className={`sidebar ${mobile ? "open" : ""}`}>
-    <div className="brand"><div className="logo-mark">l<span>.</span></div>ledgerdesk</div>
+    <div className="brand"><div className="logo-mark">l<span>.</span></div>TorussLedger</div>
     <div className="company-switch">
       <span className="company-avatar">{company.name.slice(0, 1)}</span>
       <div><strong>{company.name}</strong><small>Company workspace</small></div>

@@ -112,6 +112,8 @@ const docSchema = z.object({
     // Which company profile (GST or non-GST) a payment receipt was made under; receipts themselves stay non-GST.
     profile: z.enum(["TAXABLE", "OUTSIDE_GST"]).optional()
   }).optional(),
+  // Flat discount on the whole document, shared across the lines before GST is worked out.
+  discount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/, "Use a discount with at most two decimal places.").optional(),
   lines: z.array(z.object({
     description: z.string().min(1).max(500),
     quantity: z.string().regex(/^\d{1,8}(\.\d{1,4})?$/),

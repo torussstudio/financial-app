@@ -389,7 +389,7 @@ export function buildEinvoice(d: Row, companyRow: Row) {
     return {
       SlNo: String(i + 1), PrdDesc: String(l.description || "").slice(0, 300), IsServc: service ? "Y" : "N", HsnCd: String(l.hsn || ""),
       Qty: Number(l.quantity), ...(service ? {} : { Unit: "NOS" }), UnitPrice: n2(new D(l.price).mul(d.exchange_rate || 1)),
-      TotAmt: n2(t.txval), Discount: 0, AssAmt: n2(t.txval), GstRt: n2(l.taxRate || 0),
+      TotAmt: n2(new D(l.gross ?? l.base).mul(d.exchange_rate || 1)), Discount: n2(new D(l.discount || 0).mul(d.exchange_rate || 1)), AssAmt: n2(t.txval), GstRt: n2(l.taxRate || 0),
       IgstAmt: n2(t.iamt), CgstAmt: n2(t.camt), SgstAmt: n2(t.samt), CesRt: 0, CesAmt: 0, CesNonAdvlAmt: 0,
       StateCesRt: 0, StateCesAmt: 0, StateCesNonAdvlAmt: 0, OthChrg: 0, TotItemVal: n2(t.txval.add(t.iamt).add(t.camt).add(t.samt))
     };

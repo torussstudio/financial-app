@@ -349,3 +349,13 @@ html[data-theme=dark] img,html[data-theme=dark] .document-page,html[data-theme=d
   .document-page tr,.doc-frame tr{display:table-row!important}
   .document-page td,.doc-frame td{display:table-cell!important}
 }
+
+/* Brand name is longer now: keep it on one line */
+.brand{font-size:19px;letter-spacing:-.6px;white-space:nowrap}
+@media(max-width:1150px){.brand{font-size:17px}}
+/* Discount field in the document form */
+.discount-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;font-size:12px;color:var(--muted)}
+.discount-row small{font-weight:400}
+.discount-inputs{display:flex;gap:8px}
+.discount-inputs select{width:120px}
+.discount-inputs input{width:130px;text-align:right}

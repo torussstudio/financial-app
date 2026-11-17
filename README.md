@@ -1,6 +1,6 @@
-# Company Accounts — LedgerDesk
+# Company Accounts — TorussLedger
 
-First development milestone for one GST-registered company's accounts. Next.js frontend, a separate NestJS/Node.js API, and PostgreSQL. “LedgerDesk” and “Northstar Studio” are replaceable demo branding, not the user's company identity.
+First development milestone for one GST-registered company's accounts. Next.js frontend, a separate NestJS/Node.js API, and PostgreSQL. “TorussLedger” and “Northstar Studio” are replaceable demo branding, not the user's company identity.
 
 This is a runnable development build. The complete blueprint remains the target; see [STATUS.md](STATUS.md) for implemented features, partial workflows, and remaining work. No public deployment or production finance approval is included.
 

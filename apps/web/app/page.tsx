@@ -114,10 +114,16 @@ function parseCSV(text: string) {
   }));
 }
 
-function invoiceTotals(lines: Row[], taxable: boolean, interstate: boolean | null) {
-  let subtotal = 0, tax = 0, cgst = 0, sgst = 0;
-  for (const line of lines) {
-    const base = Math.round(Number(line.quantity || 0) * Number(line.price || 0) * 100) / 100,
+// Mirrors the API: a flat discount is shared across lines by gross value (last line takes the remainder) before GST is worked out.
+function invoiceTotals(lines: Row[], taxable: boolean, interstate: boolean | null, discount = 0) {
+  const gross = lines.map(l => Math.round(Number(l.quantity || 0) * Number(l.price || 0) * 100) / 100);
+  const grossSum = Math.round(gross.reduce((a, b) => a + b, 0) * 100) / 100;
+  const disc = Math.min(Math.max(0, Math.round((Number(discount) || 0) * 100) / 100), Math.max(0, grossSum));
+  let subtotal = 0, tax = 0, cgst = 0, sgst = 0, allocated = 0;
+  lines.forEach((line, i) => {
+    const share = disc <= 0 || grossSum <= 0 ? 0 : i === lines.length - 1 ? Math.round((disc - allocated) * 100) / 100 : Math.round(disc * gross[i] / grossSum * 100) / 100;
+    allocated += share;
+    const base = Math.round((gross[i] - share) * 100) / 100,
       lineTax = taxable ? Math.round(base * Number(line.taxRate || 0)) / 100 : 0;
     subtotal += base;
     tax += lineTax;
@@ -126,13 +132,13 @@ function invoiceTotals(lines: Row[], taxable: boolean, interstate: boolean | nul
       cgst += half;
       sgst += lineTax - half;
     }
-  }
+  });
   subtotal = Math.round(subtotal * 100) / 100;
   tax = Math.round(tax * 100) / 100;
   cgst = Math.round(cgst * 100) / 100;
   sgst = Math.round(sgst * 100) / 100;
   return {
-    subtotal, tax, cgst, sgst,
+    grossSubtotal: grossSum, discount: disc, subtotal, tax, cgst, sgst,
     igst: taxable && interstate === true ? tax : 0,
     total: Math.round((subtotal + tax) * 100) / 100
   };
@@ -197,6 +203,8 @@ export default function Page() {
     [printShift, setPrintShift] = useState("0"),
     [paletteOpen, setPaletteOpen] = useState(false),
     [dark, setDark] = useState(false),
+    [docDiscount, setDocDiscount] = useState(""),
+    [discountMode, setDiscountMode] = useState<"AMOUNT" | "PERCENT">("AMOUNT"),
     [confirmLogout, setConfirmLogout] = useState(false),
     [users, setUsers] = useState<Row[]>([]),
     [docLines, setDocLines] = useState<Row[]>([{ description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }]);
@@ -378,6 +386,10 @@ export default function Page() {
     setDocNumber(type === "document" ? extra.document?.number || "" : "");
     setDocCurrency(extra.document?.currency || "INR");
     setAdvanceAmount(String(extra.document?.advance_amount ?? "0"));
+    // A saved document stores its discount on the lines; show the total back as a flat amount when it is edited.
+    const savedDiscount = Math.round((extra.document?.lines || []).reduce((t: number, l: Row) => t + Number(l.discount || 0), 0) * 100) / 100;
+    setDocDiscount(savedDiscount > 0 ? String(savedDiscount) : "");
+    setDiscountMode("AMOUNT");
     setAdvanceStatus(extra.document?.advance_status || "NOT_RECEIVED");
     setDocumentCompany({ ...companyDocumentProfile(data?.company || {}, selectedTaxTreatment), ...(extra.document?.company_snapshot || {}) });
     setDocPartyId(extra.document?.party_id || "");
@@ -611,6 +623,7 @@ export default function Page() {
             ...(draftInterstate === null ? {} : { interstate: draftInterstate }),
             projectId: f.projectId || null,
             currency: docCurrency,
+            ...(draftDiscount > 0 ? { discount: draftDiscount.toFixed(2) } : {}),
             advanceAmount,
             advanceStatus: Number(advanceAmount) <= 0 ? "NOT_RECEIVED" : Number(advanceAmount) >= draftInvoiceTotals.total ? "FULLY_RECEIVED" : "PARTIALLY_RECEIVED",
             client: clientInfo,
@@ -886,8 +899,13 @@ export default function Page() {
     // Exports and SEZ supplies are inter-state (IGST) whatever the place of supply.
     draftInterstate = taxTreatment === "ZERO_RATED" && modal?.type === "document" ? true
       : supplyStateKnown ? placeOfSupply !== data.company.state_code : manualSupplyMode === "INTER" ? true : manualSupplyMode === "INTRA" ? false : null,
-    draftInvoiceTotals = invoiceTotals(docLines, modal?.type === "document" ? gstCharged(taxTreatment, zeroRatedType) : taxTreatment === "TAXABLE", draftInterstate),
-    draftPaymentTotal = docLines.reduce((sum, l) => sum + Math.round(Number(l.price || 0) * 100) / 100, 0),
+    draftDiscount = modal?.type === "document"
+      ? (discountMode === "PERCENT"
+        ? Math.round(docLines.reduce((t, l) => t + Math.round(Number(l.quantity || 0) * Number(l.price || 0) * 100) / 100, 0) * Math.min(100, Math.max(0, Number(docDiscount) || 0))) / 100
+        : Math.max(0, Number(docDiscount) || 0))
+      : 0,
+    draftInvoiceTotals = invoiceTotals(docLines, modal?.type === "document" ? gstCharged(taxTreatment, zeroRatedType) : taxTreatment === "TAXABLE", draftInterstate, draftDiscount),
+    draftPaymentTotal = Math.round((docLines.reduce((sum, l) => sum + Math.round(Number(l.price || 0) * 100) / 100, 0) - draftDiscount) * 100) / 100,
     advanceValue = Math.min(draftInvoiceTotals.total, Math.max(0, Number(advanceAmount) || 0));
   // Vendor bills and purchase debit notes live under Purchases & bills. Zero-rated is its own treatment, never "GST" or "non-GST".
   const filteredDocs = filter(data.documents).filter((d: Row) =>
@@ -916,7 +934,7 @@ export default function Page() {
     voucherCategoryItems, addVoucherCategory,
     formKind, setFormKind, today, pretty, data, newDocKind, setNewDocKind, taxTreatment, setTaxTreatment,
     docLines, setDocLines, placeOfSupply, setPlaceOfSupply, manualSupplyMode, setManualSupplyMode,
-    supplyStateKnown, draftInterstate, draftInvoiceTotals, draftPaymentTotal, amountInWords, money,
+    supplyStateKnown, draftInterstate, draftInvoiceTotals, draftPaymentTotal, draftDiscount, docDiscount, setDocDiscount, discountMode, setDiscountMode, amountInWords, money,
     paymentDoc, setPaymentDoc, accounts, from,
     docNumber, setDocNumber, docCurrency, setDocCurrency, advanceAmount, setAdvanceAmount, advanceValue,
     advanceStatus, setAdvanceStatus, clientInfo, setClientInfo, documentCompany, setDocumentCompany, docPartyId, setDocPartyId,
@@ -1027,7 +1045,7 @@ export default function Page() {
         <SettingsPage ctx={pageContext} />
         <footer className="page-footer">
           <span><span className="tiny-dot" /> All figures come from the posted ledger</span>
-          <span>LedgerDesk · Development v0.1</span>
+          <span>TorussLedger · Development v0.1</span>
         </footer>
       </main>
     </div>

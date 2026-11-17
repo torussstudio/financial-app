@@ -287,28 +287,53 @@ export async function postVoucher(
   );
 }
 export function calculateDocument(b: any) {
-  let subtotal = new D(0), tax = new D(0);
-  const lines = b.lines.map((l: any) => {
+  // Each line's gross value (quantity x price). A document-level discount is shared across the lines in proportion to their
+  // gross value (the last line takes the rounding remainder), so GST is charged on the value after discount, as the law requires.
+  const gross = b.lines.map((l: any) => {
     const qty = new D(l.quantity), rate = new D(l.price);
     need(qty.gt(0) && rate.gte(0), "Quantity must be positive and price non-negative.");
-    const base = qty.mul(rate).toDP(2);
+    return qty.mul(rate).toDP(2);
+  });
+  const grossTotal = gross.reduce((s: Decimal, g: Decimal) => s.add(g), new D(0));
+  const docDiscount = new D(b.discount || 0).toDP(2);
+  need(docDiscount.gte(0), "Discount cannot be negative.");
+  need(docDiscount.lt(grossTotal) || docDiscount.eq(0), "Discount must be less than the subtotal.");
+  let allocated = new D(0);
+  const shares = gross.map((g: Decimal, i: number) => {
+    if (b.lines[i].discount !== undefined && b.lines[i].discount !== null) return new D(b.lines[i].discount).toDP(2);
+    if (docDiscount.eq(0)) return new D(0);
+    const share = i === gross.length - 1 ? docDiscount.sub(allocated) : docDiscount.mul(g).div(grossTotal).toDP(2);
+    allocated = allocated.add(share);
+    return share;
+  });
+  let subtotal = new D(0), tax = new D(0), discountTotal = new D(0), grossSum = new D(0);
+  const lines = b.lines.map((l: any, i: number) => {
+    const qty = new D(l.quantity), rate = new D(l.price);
+    const d = shares[i];
+    need(d.gte(0) && d.lte(gross[i]), "Discount on line " + (i + 1) + " cannot exceed its amount.");
+    const base = gross[i].sub(d);
     const percentage = new D(l.taxRate || 0);
     need(percentage.gte(0) && percentage.lte(100), "Invalid tax rate.");
     const appliedPercentage = charged(b.taxTreatment, b.zeroRatedType) ? percentage : new D(0);
     const t = base.mul(appliedPercentage).div(100).toDP(2);
     subtotal = subtotal.add(base);
     tax = tax.add(t);
+    discountTotal = discountTotal.add(d);
+    grossSum = grossSum.add(gross[i]);
     return {
       ...l,
       quantity: qty.toString(),
       price: rate.toFixed(2),
       taxRate: percentage.toString(),
+      gross: gross[i].toFixed(2),
+      discount: d.toFixed(2),
       base: base.toFixed(2),
       tax: t.toFixed(2)
     };
   });
   need(subtotal.gt(0), "Document must have a positive subtotal.");
-  return { lines, subtotal: subtotal.toFixed(2), tax: tax.toFixed(2), total: subtotal.add(tax).toFixed(2) };
+  // subtotal is the taxable value after discount; grossSubtotal is the figure printed above the discount.
+  return { lines, subtotal: subtotal.toFixed(2), grossSubtotal: grossSum.toFixed(2), discount: discountTotal.toFixed(2), tax: tax.toFixed(2), total: subtotal.add(tax).toFixed(2) };
 }
 // GST lines split per line like the printed document: output tax for an invoice (credit) or a credit note against it (debit),
 // input tax for a vendor bill (debit). Zero components are left out because every journal line must carry an amount.
@@ -1117,6 +1142,8 @@ export async function issueCreditNote(
       quantity: qty.toString(),
       price: original.price,
       taxRate: original.taxRate,
+      // A credit note reverses the same discount per unit that the invoice gave.
+      discount: new D(original.discount || 0).mul(qty).div(original.quantity).toDP(2).toString(),
       sourceLine: r.line
     };
   });

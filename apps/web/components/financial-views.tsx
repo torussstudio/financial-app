@@ -374,6 +374,9 @@ export function DocumentPreview({ d }: {
   // An issued foreign-currency document is settled in its own currency; its INR equivalents are printed alongside.
   const foreignDoc = !isReceipt && d.total_inr != null && d.currency && d.currency !== "INR";
   const subtotal = Number(d.subtotal || 0),
+    // Discount is stored per line (shared out from one flat amount); the printed subtotal is the figure before it.
+    discount = Math.round(((d.lines as Row[]) || []).reduce((t: number, l: Row) => t + Number(l.discount || 0), 0) * 100) / 100,
+    grossSubtotal = Math.round((subtotal + discount) * 100) / 100,
     total = Number(d.total || 0),
     // Issued invoices show what was actually received (the advance is posted as an allocated receipt); drafts show the planned advance.
     credited = foreignDoc ? 0 : Math.max(0, Number(d.credited || 0)),
@@ -436,11 +439,13 @@ export function DocumentPreview({ d }: {
         {lines.map((line: Row, i: number) => <tr key={i}>
           <td>{i + 1}</td>
           <td><strong>{line.description}</strong></td>
-          <td className="right">{docMoney(line.base)}</td>
+          <td className="right">{docMoney(line.gross ?? line.base)}</td>
         </tr>)}
       </tbody>
     </table>
     <div className="doc-totals">
+      {discount > 0 && <div><span>Subtotal</span><strong>{docMoney(grossSubtotal)}</strong></div>}
+      {discount > 0 && <div><span>Discount</span><strong>− {docMoney(discount)}</strong></div>}
       <div className="grand-total"><span>Total received</span><strong>{docMoney(total)}</strong></div>
     </div>
     <div className="pr-notes">
@@ -461,9 +466,9 @@ export function DocumentPreview({ d }: {
       <td><strong>{line.description}</strong>{line.hsn && <small>HSN/SAC {line.hsn}</small>}</td>
       <td className="right">{line.quantity}</td>
       <td className="right">{docMoney(line.price)}</td>
-      {gst && <td className="right">{docMoney(line.base)}</td>}
+      {gst && <td className="right">{docMoney(line.gross ?? line.base)}</td>}
       {gst && (d.interstate ? <td className="right">{docMoney(tax)}</td> : <><td className="right">{docMoney(half)}</td><td className="right">{docMoney(otherHalf)}</td></>)}
-      <td className="right">{docMoney(Number(line.base || 0) + tax)}</td>
+      <td className="right">{docMoney(gst ? Number(line.base || 0) + tax : Number(line.gross ?? line.base ?? 0))}</td>
     </tr>;
   });
   const invoiceBody = <><div className="document-table-scroll">
@@ -482,7 +487,9 @@ export function DocumentPreview({ d }: {
         <tbody>{invoiceRows}</tbody>
       </table>
     </div><div className="doc-totals">
-      <div><span>Subtotal</span><strong>{docMoney(subtotal)}</strong></div>
+      <div><span>Subtotal</span><strong>{docMoney(grossSubtotal)}</strong></div>
+      {discount > 0 && <div><span>Discount</span><strong>− {docMoney(discount)}</strong></div>}
+      {discount > 0 && gst && <div><span>Taxable value</span><strong>{docMoney(subtotal)}</strong></div>}
       {gst && (d.interstate ? <div><span>IGST</span><strong>{docMoney(igst)}</strong></div> : <><div><span>CGST</span><strong>{docMoney(cgst)}</strong></div><div><span>SGST</span><strong>{docMoney(sgst)}</strong></div></>)}
       <div><span>{d.status === "ISSUED" && !isProforma ? "Amount Received" : "Advance Paid"}</span><strong>{docMoney(advance)}</strong></div>
       {credited > 0 && <div><span>Credit notes</span><strong>{docMoney(credited)}</strong></div>}
@@ -548,7 +555,8 @@ export function DocumentPreview({ d }: {
       {d.signed_qr && <SignedQr text={d.signed_qr}/>}
     </div>}
   </div> : null;
-  const usedLines = lines.reduce((n: number, l: any) => n + docLineCost(l.description, l.hsn), 0);
+  // Discount (and, on GST documents, taxable value) rows add height, so the page is packed one density tier tighter.
+  const usedLines = lines.reduce((n: number, l: any) => n + docLineCost(l.description, l.hsn), 0) + (discount > 0 ? (gst ? 2 : 1) : 0);
   const density = usedLines <= 5 ? "airy" : usedLines <= 10 ? "roomy" : usedLines <= 15 ? "snug" : "tight";
   return <article data-density={density} style={{ ["--doc-accent" as any]: accent }} className={"document-page" + (gstDoc ? "" : " non-gst-doc")}>
       <div className="doc-frame">
