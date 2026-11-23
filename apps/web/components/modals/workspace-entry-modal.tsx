@@ -156,7 +156,7 @@ export function WorkspaceEntryModal({ context }: {
   const docLines: Row[] = context.docLines;
   // A document must stay on one A4 page: at most 10 items, within a shared budget of printed description lines.
   const docUsedLines = docLines.reduce((n, l) => n + docLineCost(l.description, l.hsn), 0);
-  const docLinesBudget = docLineBudget(docLines.length) - (draftDiscount > 0 ? (gstCharged(taxTreatment, zeroRatedType) ? 2 : 1) : 0);
+  const docLinesBudget = docLineBudget(docLines.length) - (draftDiscount > 0 ? 1 : 0);
   const docCanAddItem = docLines.length < DOC_MAX_ITEMS && docUsedLines + 1 <= docLineBudget(docLines.length + 1);
   // Lines carry a GST rate on taxable and zero-rated documents (under LUT it is reported in GSTR-1 but not charged).
   const rateColumn = taxTreatment === "TAXABLE" || taxTreatment === "ZERO_RATED";
@@ -443,15 +443,15 @@ export function WorkspaceEntryModal({ context }: {
     required/>
               </Field> : <input type="hidden"
     name="dueDate"
-    value={modal.document?.due_date?.slice(0, 10) || localDate(15)}/>}<Field label={newDocKind === "BILL" ? "Company details" : newDocKind === "INVOICE" ? (taxTreatment === "TAXABLE" ? "GST Invoice treatment" : "Non-GST Invoice treatment") : "Tax treatment"}>
-                {/* On a payment receipt this only picks the GST or non-GST company profile; the receipt itself never carries GST. */}
+    value={modal.document?.due_date?.slice(0, 10) || localDate(15)}/>}<Field label={newDocKind === "BILL" ? "Tax treatment" : newDocKind === "INVOICE" ? (taxTreatment === "TAXABLE" ? "GST Invoice treatment" : "Non-GST Invoice treatment") : "Tax treatment"}>
+                {/* On a payment receipt this only picks the company profile (GST, zero-rated export/SEZ or non-GST); the receipt itself never carries GST. */}
                 <select value={taxTreatment} onChange={e => {
       setTaxTreatment(e.target.value);
       setDocumentCompany(companyDocumentProfile(data.company, e.target.value));
       // Exports are reported with place-of-supply code 96 (foreign country); a SEZ recipient keeps its own state code.
-      if (e.target.value === "ZERO_RATED" && !String(clientInfo.gstin || "").trim()) setPlaceOfSupply("96");
+      if (newDocKind !== "BILL" && e.target.value === "ZERO_RATED" && !String(clientInfo.gstin || "").trim()) setPlaceOfSupply("96");
     }}>
-                  {(newDocKind === "BILL" ? ["TAXABLE", "OUTSIDE_GST"] : ["TAXABLE", "ZERO_RATED", ...(["NIL_RATED", "EXEMPT"].includes(taxTreatment) ? [taxTreatment] : []), "OUTSIDE_GST"]).map(k => <option key={k} value={k}>{k === "ZERO_RATED" ? "Zero-rated (export / SEZ)" : pretty(k)}</option>)}
+                  {(newDocKind === "BILL" ? ["TAXABLE", "ZERO_RATED", "OUTSIDE_GST"] : ["TAXABLE", "ZERO_RATED", ...(["NIL_RATED", "EXEMPT"].includes(taxTreatment) ? [taxTreatment] : []), "OUTSIDE_GST"]).map(k => <option key={k} value={k}>{k === "ZERO_RATED" ? "Zero-rated (export / SEZ)" : pretty(k)}</option>)}
                 </select>
               </Field>{newDocKind !== "BILL" && taxTreatment === "ZERO_RATED" && <><Field label="Zero-rated supply">
                   <select value={zeroRatedType} onChange={e => setZeroRatedType(e.target.value)}>
@@ -602,8 +602,8 @@ export function WorkspaceEntryModal({ context }: {
                 </label>
                 <div className="document-form-totals">
                   <div><span>Subtotal</span><strong>{docMoney(draftInvoiceTotals.grossSubtotal)}</strong></div>
-                  {draftInvoiceTotals.discount > 0 && <><div><span>Discount</span><strong>− {docMoney(draftInvoiceTotals.discount)}</strong></div>{gstCharged(taxTreatment, zeroRatedType) && <div><span>Taxable value</span><strong>{docMoney(draftInvoiceTotals.subtotal)}</strong></div>}</>}
                   {gstCharged(taxTreatment, zeroRatedType) && (draftInterstate === true ? <div><span>IGST</span><strong>{docMoney(draftInvoiceTotals.igst)}</strong></div> : draftInterstate === false ? <><div><span>CGST</span><strong>{docMoney(draftInvoiceTotals.cgst)}</strong></div><div><span>SGST</span><strong>{docMoney(draftInvoiceTotals.sgst)}</strong></div></> : <div><span>GST</span><strong>Select a tax calculation</strong></div>)}
+                  {draftInvoiceTotals.discount > 0 && <div><span>Discount</span><strong>− {docMoney(draftInvoiceTotals.discount)}</strong></div>}
                   <div>
                     <span>Advance status</span>
                     <strong>

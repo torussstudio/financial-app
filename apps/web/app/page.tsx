@@ -375,7 +375,7 @@ export default function Page() {
     setDocLines([{ description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }]);
     // Payment receipts are always saved as non-GST; the company profile they were made under lives on their company snapshot.
     const selectedTaxTreatment = extra.document?.kind === "BILL"
-      ? (extra.document.company_snapshot?.profile === "TAXABLE" ? "TAXABLE" : "OUTSIDE_GST")
+      ? (["TAXABLE", "ZERO_RATED"].includes(extra.document.company_snapshot?.profile) ? extra.document.company_snapshot.profile : "OUTSIDE_GST")
       : extra.document?.tax_treatment || "TAXABLE";
     setTaxTreatment(selectedTaxTreatment);
     setZeroRatedType(extra.document?.zero_rated_type || "LUT");
@@ -908,12 +908,24 @@ export default function Page() {
     draftPaymentTotal = Math.round((docLines.reduce((sum, l) => sum + Math.round(Number(l.price || 0) * 100) / 100, 0) - draftDiscount) * 100) / 100,
     advanceValue = Math.min(draftInvoiceTotals.total, Math.max(0, Number(advanceAmount) || 0));
   // Vendor bills and purchase debit notes live under Purchases & bills. Zero-rated is its own treatment, never "GST" or "non-GST".
-  const filteredDocs = filter(data.documents).filter((d: Row) =>
+  const inTaxTab = (d: Row, tab: string) => tab === "ALL" || (tab === "GST" ? d.tax_treatment === "TAXABLE" : tab === "ZERO_RATED" ? d.tax_treatment === "ZERO_RATED" : !["TAXABLE", "ZERO_RATED"].includes(d.tax_treatment));
+  // Every filter except the GST tab, so the Documents tabs can show how many documents each one holds.
+  const docsAnyTab = filter(data.documents).filter((d: Row) =>
     !["PURCHASE", "DEBIT_NOTE"].includes(d.kind) &&
     (docKind === "ALL" || d.kind === docKind) &&
-    (taxTab === "ALL" || (taxTab === "GST" ? d.tax_treatment === "TAXABLE" : taxTab === "ZERO_RATED" ? d.tax_treatment === "ZERO_RATED" : !["TAXABLE", "ZERO_RATED"].includes(d.tax_treatment))) &&
     d.issue_date >= from
   );
+  const filteredDocs = docsAnyTab.filter((d: Row) => inTaxTab(d, taxTab));
+  // Quick date ranges, shared by the filter bar and the Documents page's date picker.
+  const fyStart = (back = 0) => { const n = new Date(); return (n.getMonth() >= 3 ? n.getFullYear() : n.getFullYear() - 1) - back; };
+  const datePresets = ([
+    ["This month", () => [monthStart(), today()]],
+    ["6 months", () => [monthStart(-5), today()]],
+    ["Last month", () => [monthStart(-1), localDate(-new Date().getDate())]],
+    ["This FY", () => [fyStart() + "-04-01", today()]],
+    ["Last FY", () => [fyStart(1) + "-04-01", (fyStart(1) + 1) + "-03-31"]],
+  ] as [string, () => string[]][]).map(([label, range]) => ({ label, range, apply: () => { const [f, t] = range(); setFrom(f); setTo(t); } }));
+  const exportVisible = () => exportRows(txs.map((e: Row) => ({ Date: e.entry_date, Number: e.number, Type: e.kind, Description: e.description, Amount: e.amount })), "account-entries-" + from + "-" + to);
   const txs = filter(data.entries).filter((e: Row) =>
     page === "capital" ? ["CAPITAL_IN", "CAPITAL_RETURN", "LOAN_IN", "LOAN_REPAY", "INVESTMENT"].includes(e.kind)
     : page === "income" ? ["INCOME", "EXPENSE", "REIMBURSEMENT", "INVOICE", "BILL", "CREDIT_NOTE", "PURCHASE", "DEBIT_NOTE", "SALES_DEBIT_NOTE"].includes(e.kind)
@@ -949,7 +961,8 @@ export default function Page() {
     docKind, setDocKind, search, setSearch, filteredDocs, perform, from, to, partyFilter, accountFilter,
     loading, busy, setError, notify, fail, report, setReport, Field, users, setUsers, api, session, setModal, EntryTable, Report,
     Badge, today, exportCSV, exportRows, txs, filter, active, partySelect, bankSelect, catSelect,
-    setPartyFilter, billsDue, attach, confirmFiled, downloadEinvoice, downloadFile, withWarnings
+    setPartyFilter, billsDue, attach, confirmFiled, downloadEinvoice, downloadFile, withWarnings,
+    docsAnyTab, inTaxTab, datePresets, setFrom, setTo, refresh, exportVisible
   };
 
   return <div className="app-shell">
@@ -977,7 +990,7 @@ export default function Page() {
         onOutstanding={() => { go("documents"); setDocKind("INVOICE") }}
       />
       <main>
-        <div className="page-heading">
+        {!["documents", "dashboard"].includes(page) && <div className="page-heading">
           <div>
             <span className="eyebrow">{page === "dashboard" ? "YOUR FINANCES, AT A GLANCE" : "COMPANY ACCOUNTS"}</span>
             <h1>{page === "dashboard" ? "Business overview" : active?.[1]}</h1>
@@ -1000,36 +1013,32 @@ export default function Page() {
             } as Row)[page]}</p>
           </div>
           <div className="heading-actions">
-            {page !== "ledger" && <button className="btn" onClick={() => exportRows(txs.map((e: Row) => ({ Date: e.entry_date, Number: e.number, Type: e.kind, Description: e.description, Amount: e.amount })), "account-entries-" + from + "-" + to)}>
+            {page !== "ledger" && <button className="btn" onClick={exportVisible}>
               <Download size={16} />Export visible entries
             </button>}
             {canWrite && !["income", "capital", "ledger"].includes(page) && <button className="btn primary" onClick={() => open(page === "documents" ? "document" : page === "purchases" ? "purchase" : page === "items" ? "item" : page === "parties" ? "party" : page === "projects" ? "project" : page === "capital" ? "capital" : page === "budgets" ? "budget" : page === "recurring" ? "recurring" : "voucher")}>
               <Plus size={17} />{page === "documents" ? "New document" : page === "purchases" ? "New vendor bill" : page === "items" ? "Add item" : page === "parties" ? "Add contact" : page === "projects" ? "New project" : page === "budgets" ? "Set budget" : page === "recurring" ? "New schedule" : "New voucher"}
             </button>}
           </div>
-        </div>
+        </div>}
         {error && !modal && <div className="error" role="alert">
           <AlertCircle size={17} />{error}
           <button className="icon-btn" onClick={() => setError("")}><X size={15} /></button>
         </div>}
-        <div className="filterbar">
+        {!["documents", "dashboard"].includes(page) && <div className="filterbar">
           <div className="range-inputs">
             <Clock3 size={15} />
             <input aria-label="Start date" type="date" value={from} onChange={e => setFrom(e.target.value)} />
             <span>—</span>
             <input aria-label="End date" type="date" value={to} onChange={e => setTo(e.target.value)} />
           </div>
-          <button className="filter-chip" onClick={() => { setFrom(monthStart()); setTo(today()) }}>This month</button>
-          <button className="filter-chip" onClick={() => { setFrom(monthStart(-5)); setTo(today()) }}>6 months</button>
-          <button className="filter-chip" onClick={() => { setFrom(monthStart(-1)); setTo(localDate(-new Date().getDate())) }}>Last month</button>
-          <button className="filter-chip" onClick={() => { const n = new Date(); const y = n.getMonth() >= 3 ? n.getFullYear() : n.getFullYear() - 1; setFrom(y + "-04-01"); setTo(today()) }}>This FY</button>
-          <button className="filter-chip" onClick={() => { const n = new Date(); const y = (n.getMonth() >= 3 ? n.getFullYear() : n.getFullYear() - 1) - 1; setFrom(y + "-04-01"); setTo((y + 1) + "-03-31") }}>Last FY</button>
+          {datePresets.map(p => <button key={p.label} className="filter-chip" onClick={p.apply}>{p.label}</button>)}
           <select aria-label="Filter by client or vendor" value={partyFilter} onChange={e => setPartyFilter(e.target.value)}>
             <option value="">All clients & vendors</option>
             {data.parties.map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <button className={"icon-btn refresh " + (loading ? "spinning" : "")} aria-label="Refresh data" disabled={loading} onClick={refresh}><RefreshCw size={15} /></button>
-        </div>
+        </div>}
         {page === "dashboard" && <DashboardPage ctx={pageContext} />}
         <DocumentsPage ctx={pageContext} />
         {page === "purchases" && <PurchasesPage ctx={pageContext} />}
