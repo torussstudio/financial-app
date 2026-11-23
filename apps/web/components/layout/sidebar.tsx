@@ -20,12 +20,11 @@ import {
 } from "lucide-react";
 import { ActionButton } from "../action-button";
 export const navigation = [
-  ["dashboard", "Overview", LayoutDashboard], ["documents", "Documents", FileText],
-  ["purchases", "Purchases & bills", ReceiptText],
+  ["dashboard", "Overview", LayoutDashboard], ["parties", "Clients & vendors", Users],
+  ["items", "Products & services", Package], ["projects", "Projects", FolderKanban],
+  ["documents", "Documents", FileText], ["purchases", "Purchases & bills", ReceiptText],
   ["vouchers", "Daily vouchers", ArrowLeftRight], ["income", "Income & expenses", Wallet],
-  ["capital", "Capital & investments", Landmark], ["parties", "Clients & vendors", Users],
-  ["items", "Products & services", Package],
-  ["projects", "Projects", FolderKanban], ["bank", "Bank & cash", BookOpen], ["ledger", "Ledger", ScrollText],
+  ["capital", "Capital & investments", Landmark], ["bank", "Bank & cash", BookOpen], ["ledger", "Ledger", ScrollText],
   ["reports", "Reports", ChartNoAxesCombined], ["recurring", "Recurring entries", Repeat2],
   ["budgets", "Budgets", Target], ["settings", "Settings", Settings],
 ] as const;

@@ -109,8 +109,8 @@ const docSchema = z.object({
     bank_details: z.string().max(1000).optional(),
     gst_logo: z.string().max(1_500_000).regex(/^(?:|data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2})$/).optional(),
     non_gst_logo: z.string().max(1_500_000).regex(/^(?:|data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2})$/).optional(),
-    // Which company profile (GST or non-GST) a payment receipt was made under; receipts themselves stay non-GST.
-    profile: z.enum(["TAXABLE", "OUTSIDE_GST"]).optional()
+    // Which company profile (GST, zero-rated export/SEZ or non-GST) a payment receipt was made under; receipts themselves stay non-GST.
+    profile: z.enum(["TAXABLE", "ZERO_RATED", "OUTSIDE_GST"]).optional()
   }).optional(),
   // Flat discount on the whole document, shared across the lines before GST is worked out.
   discount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/, "Use a discount with at most two decimal places.").optional(),

@@ -357,14 +357,17 @@ export function DocumentPreview({ d }: {
   const gstDoc = !isReceipt && !isPaymentReceipt && ["TAXABLE", "ZERO_RATED"].includes(d.tax_treatment),
     gst = gstDoc && gstCharged(d.tax_treatment, d.zero_rated_type);
   const company = d.company || {}, party = d.party || {}, lines: Row[] = d.lines || [];
-  const documentLogo = isReceipt ? "" : gstDoc ? company.gst_logo : company.non_gst_logo;
+  // A payment receipt never charges GST, but it is still issued under the GST or non-GST company profile picked on the form
+  // (saved as company.profile), so its branding follows that profile rather than gstDoc.
+  const gstBrand = gstDoc || (isPaymentReceipt && ["TAXABLE", "ZERO_RATED"].includes(company.profile));
+  const documentLogo = isReceipt ? "" : gstBrand ? company.gst_logo : company.non_gst_logo;
   const [logoColor, setLogoColor] = useState("");
   useEffect(() => {
     let live = true;
-    if (!gstDoc && documentLogo) logoAccent(documentLogo).then(c => { if (live) setLogoColor(c); }); else setLogoColor("");
+    if (!gstBrand && documentLogo) logoAccent(documentLogo).then(c => { if (live) setLogoColor(c); }); else setLogoColor("");
     return () => { live = false; };
-  }, [gstDoc, documentLogo]);
-  const accent = gstDoc ? "#111111" : logoColor || "#111111";
+  }, [gstBrand, documentLogo]);
+  const accent = gstBrand ? "#111111" : logoColor || "#111111";
   const docMoney = (value: any) => new Intl.NumberFormat(
     "en-IN",
     { style: "currency", currency: d.currency || "INR", maximumFractionDigits: 2 }
@@ -488,9 +491,9 @@ export function DocumentPreview({ d }: {
       </table>
     </div><div className="doc-totals">
       <div><span>Subtotal</span><strong>{docMoney(grossSubtotal)}</strong></div>
-      {discount > 0 && <div><span>Discount</span><strong>− {docMoney(discount)}</strong></div>}
-      {discount > 0 && gst && <div><span>Taxable value</span><strong>{docMoney(subtotal)}</strong></div>}
       {gst && (d.interstate ? <div><span>IGST</span><strong>{docMoney(igst)}</strong></div> : <><div><span>CGST</span><strong>{docMoney(cgst)}</strong></div><div><span>SGST</span><strong>{docMoney(sgst)}</strong></div></>)}
+      {/* GST is still worked out on the value after discount; the row is only printed below the tax lines. */}
+      {discount > 0 && <div><span>Discount</span><strong>− {docMoney(discount)}</strong></div>}
       <div><span>{d.status === "ISSUED" && !isProforma ? "Amount Received" : "Advance Paid"}</span><strong>{docMoney(advance)}</strong></div>
       {credited > 0 && <div><span>Credit notes</span><strong>{docMoney(credited)}</strong></div>}
       <div><span>Balance Payable</span><strong>{docMoney(Math.max(0, total - settled))}</strong></div>
@@ -556,14 +559,14 @@ export function DocumentPreview({ d }: {
     </div>}
   </div> : null;
   // Discount (and, on GST documents, taxable value) rows add height, so the page is packed one density tier tighter.
-  const usedLines = lines.reduce((n: number, l: any) => n + docLineCost(l.description, l.hsn), 0) + (discount > 0 ? (gst ? 2 : 1) : 0);
+  const usedLines = lines.reduce((n: number, l: any) => n + docLineCost(l.description, l.hsn), 0) + (discount > 0 ? 1 : 0);
   const density = usedLines <= 5 ? "airy" : usedLines <= 10 ? "roomy" : usedLines <= 15 ? "snug" : "tight";
   return <article data-density={density} style={{ ["--doc-accent" as any]: accent }} className={"document-page" + (gstDoc ? "" : " non-gst-doc")}>
       <div className="doc-frame">
         {company.demo && <div className="document-watermark">DEMONSTRATION · NOT A LEGAL TAX DOCUMENT</div>}
         {<div className="document-head">
       <div>
-        {documentLogo ? <img className={"doc-logo" + (gstDoc ? " gst-logo" : "")} src={documentLogo} alt={gstDoc ? "GST company logo" : "Non-GST company logo"}/> : <><div className="doc-emblem">L.</div>
+        {documentLogo ? <img className={"doc-logo" + (gstBrand ? " gst-logo" : "")} src={documentLogo} alt={gstBrand ? "GST company logo" : "Non-GST company logo"}/> : <><div className="doc-emblem">L.</div>
         <h2>{company.name}</h2></>}
         {(companyAddress.length ? companyAddress : ["Company address not configured"]).map((line: string, i: number) => <p key={i}>{line}</p>)}
         {((isInvoice && gstDoc) || isPaymentReceipt) && company.state_code && <p>State code: {company.state_code}</p>}
@@ -611,7 +614,7 @@ export function DocumentPreview({ d }: {
           {splitBank.map((line: string, i: number) => <p key={i}>{line}</p>)}
         </div> : <p>{company.bank_details || "Not configured"}</p>}
       </div>
-      {!isPaymentReceipt && !isInvoice && !isCreditNote && <div><small>TERMS</small><p>{company.terms}</p></div>}
+      {!isPaymentReceipt && !isInvoice && !isCreditNote && d.kind !== "PROFORMA" && <div><small>TERMS</small><p>{company.terms}</p></div>}
     </div>}
     </div>
     </article>;
