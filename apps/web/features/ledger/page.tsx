@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import type { Row } from "../../lib/format";
+import { exportLedgerPdf } from "./ledger-pdf";
 type Props = {
   ctx: any
 };
 const KIND_ORDER = ["ASSET", "LIABILITY", "EQUITY", "INCOME", "EXPENSE"];
 const cents = (v: any) => Math.round(Number(v || 0) * 100);
 export function LedgerPage({ ctx }: Props) {
-  const { page, data, money, day, from, to, api, exportRows, pretty, partyFilter, bankLabel } = ctx;
+  const { page, data, money, day, from, to, api, pretty, isAdmin, removeEntry, partyFilter, bankLabel } = ctx;
   const accounts: Row[] = data?.accounts || [];
   const [account, setAccount] = useState("");
   const [ledger, setLedger] = useState<Row | null>(null);
@@ -53,13 +54,19 @@ export function LedgerPage({ ctx }: Props) {
           </optgroup>)}
           {other.length > 0 && <optgroup label="Other">{other.map(a => <option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}</optgroup>}
         </select>
-        <button className="btn" disabled={!view?.rows.length} onClick={() => view && exportRows(view.rows.map((r: Row) => ({
-          Date: r.entry_date, Number: r.number, Type: r.kind, Description: r.description, Party: r.party_name || "", ...(allMode ? { Account: r.account_code + " " + r.account_name } : {}),
-          Debit: r.debit, Credit: r.credit, ...(allMode ? {} : { Balance: (r.running / 100).toFixed(2) + (r.running >= 0 ? " Dr" : " Cr") })
-        })), "ledger-" + selected + "-" + from + "-" + to)}><Download size={15} />Export</button>
+        <button className="btn" disabled={!view?.rows.length} onClick={() => {
+          if (!view || !ledger) return;
+          const title = allMode ? "All accounts" : (accounts.find(a => a.code === ledger.account.code && a.is_cash) ? bankLabel(ledger.account) : ledger.account.name);
+          exportLedgerPdf({
+            company: data?.company || {}, title, accountCode: selected, allMode, partyName,
+            party: partyFilter ? (data?.parties || []).find((p: Row) => p.id === partyFilter) || null : null, from, to,
+            rows: view.rows, opening: view.opening, closing: view.closing, debit: view.debit, credit: view.credit,
+            money, day, fileName: "Ledger - " + title + " - " + from + " to " + to
+          });
+        }}><Download size={15} />Export PDF</button>
       </div>
     </div>
-    {failed ? <div className="error" role="alert">{failed}</div> : !view ? <p className="fine">{busy ? "Loading ledger…" : "Choose an account to see its ledger."}</p> : <div className="table-scroll">
+    {failed ? <div className="error" role="alert">{failed}</div> : !view ? (busy ? <div className="skel-rows" role="status" aria-label="Loading ledger"><i/><i/><i/><i/><i/><i/></div> : <p className="fine">Choose an account to see its ledger.</p>) : <div className="table-scroll" style={{ opacity: busy ? .6 : 1, transition: "opacity .2s" }}>
       <table>
         <thead>
           <tr>
@@ -70,12 +77,14 @@ export function LedgerPage({ ctx }: Props) {
             <th className="right">Debit</th>
             <th className="right">Credit</th>
             {!allMode && <th className="right">Balance</th>}
+            {isAdmin && <th />}
           </tr>
         </thead>
         <tbody>
           {!allMode && <tr>
             <td colSpan={5}><strong>Opening balance</strong><small> as of {day(from)}</small></td>
             <td className="right amount"><strong>{side(view.opening)}</strong></td>
+            {isAdmin && <td />}
           </tr>}
           {view.rows.map((r: Row, i: number) => <tr key={r.id + "-" + i}>
             <td>{day(r.entry_date)}</td>
@@ -85,6 +94,7 @@ export function LedgerPage({ ctx }: Props) {
             <td className="right amount">{cents(r.debit) ? money(r.debit) : ""}</td>
             <td className="right amount">{cents(r.credit) ? money(r.credit) : ""}</td>
             {!allMode && <td className="right amount">{side(r.running)}</td>}
+            {isAdmin && <td className="right"><button className="link small danger-link" onClick={() => removeEntry(r)}>Delete</button></td>}
           </tr>)}
           {!view.rows.length && <tr><td colSpan={allMode ? 6 : 6}><small>No entries {allMode ? "" : "on this account "}in the selected period{partyName ? " for " + partyName : ""}.</small></td></tr>}
           <tr>
@@ -92,10 +102,12 @@ export function LedgerPage({ ctx }: Props) {
             <td className="right amount"><strong>{money(view.debit / 100)}</strong></td>
             <td className="right amount"><strong>{money(view.credit / 100)}</strong></td>
             {!allMode && <td />}
+            {isAdmin && <td />}
           </tr>
           {!allMode && <tr>
             <td colSpan={5}><strong>Closing balance</strong><small> as of {day(to)}</small></td>
             <td className="right amount"><strong>{side(view.closing)}</strong></td>
+            {isAdmin && <td />}
           </tr>}
         </tbody>
       </table>

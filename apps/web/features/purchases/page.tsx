@@ -81,6 +81,7 @@ export function PurchasesPage({ ctx }: Props) {
                 <td><div className="row-actions">
                   <ActionButton className="icon-btn" title="Preview debit note" onClick={() => viewDoc(d.id)}><Eye size={16}/></ActionButton>
                   {canWrite && d.status === "ISSUED" && <button className="link small" onClick={() => open("cancel", { document: d })}>Cancel</button>}
+                  {ctx.isAdmin && <button className="link small danger-link" onClick={() => ctx.removeDocument(d)}>Delete</button>}
                 </div></td>
               </tr>;
               return <tr key={d.id}>
@@ -104,6 +105,7 @@ export function PurchasesPage({ ctx }: Props) {
                     {canWrite && d.status === "ISSUED" && due(d) > 0 && Number(vendor?.advance_paid) > 0 && <button className="link small" onClick={() => open("advance", { direction: "PAYMENT", partyId: d.party_id })}>Use advance</button>}
                     {canWrite && d.status === "ISSUED" && due(d) > 0 && <button className="link small" onClick={() => open("debitNote", { document: d })}>Debit note</button>}
                     {canWrite && (d.status === "DRAFT" || (d.status === "ISSUED" && Number(d.paid) === 0)) && <button className="link small" onClick={() => open("cancel", { document: d })}>Cancel</button>}
+                    {ctx.isAdmin && <button className="link small danger-link" onClick={() => ctx.removeDocument(d)}>Delete</button>}
                   </div>
                 </td>
               </tr>;

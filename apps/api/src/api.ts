@@ -52,7 +52,8 @@ const voucher = z.object({
   ]),
   date,
   amount,
-  description: z.string().min(2).max(300),
+  // Optional: a blank description falls back to the category (and party) name when posting.
+  description: z.string().trim().max(300).default(""),
   cashAccount: z.string(),
   account: z.string().optional(),
   destinationAccount: z.string().optional(),
@@ -245,13 +246,13 @@ export class ApiController {
       // Every posted line in the range, across accounts; a client/vendor narrows it to their own entries.
       const args: any[] = [f.from, f.to];
       if (f.partyId) args.push(f.partyId);
-      const all = await this.db.query("SELECT e.id,e.number,e.description,e.entry_date::text,e.kind,p.name AS party_name,a.code AS account_code,a.name AS account_name,l.debit::text,l.credit::text FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id JOIN accounts a ON a.code=l.account_code LEFT JOIN parties p ON p.id=e.party_id WHERE e.entry_date BETWEEN $1::date AND $2::date" + (f.partyId ? " AND e.party_id=$3" : "") + " ORDER BY e.entry_date,e.created_at,a.code LIMIT 2000", args);
+      const all = await this.db.query("SELECT e.document_id,d.number AS document_number,COALESCE(d.number,e.number) AS doc_number,COALESCE(d.tax_treatment,e.snapshot->'company'->>'profile') AS tax_treatment,e.id,e.number,e.description,e.entry_date::text,e.kind,p.name AS party_name,a.code AS account_code,a.name AS account_name,l.debit::text,l.credit::text FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id JOIN accounts a ON a.code=l.account_code LEFT JOIN parties p ON p.id=e.party_id LEFT JOIN documents d ON d.id=e.document_id WHERE e.entry_date BETWEEN $1::date AND $2::date" + (f.partyId ? " AND e.party_id=$3" : "") + " ORDER BY e.entry_date,e.created_at,a.code LIMIT 2000", args);
       return { account: { code: "ALL", name: "All accounts", kind: "ALL" }, opening: "0", rows: all.rows };
     }
     const account = await one(this.db, "SELECT code,name,kind FROM accounts WHERE code=$1", [f.account]);
     need(account, "Account not found.", 404);
     const opening = await one(this.db, "SELECT COALESCE(SUM(l.debit-l.credit),0)::text AS balance FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id WHERE l.account_code=$1 AND e.entry_date<$2::date" + (f.partyId ? " AND e.party_id=$3" : ""), f.partyId ? [f.account, f.from, f.partyId] : [f.account, f.from]);
-    const rows = await this.db.query("SELECT e.id,e.number,e.description,e.entry_date::text,e.kind,p.name AS party_name,l.debit::text,l.credit::text FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id LEFT JOIN parties p ON p.id=e.party_id WHERE l.account_code=$1 AND e.entry_date BETWEEN $2::date AND $3::date" + (f.partyId ? " AND e.party_id=$4" : "") + " ORDER BY e.entry_date,e.created_at", f.partyId ? [f.account, f.from, f.to, f.partyId] : [f.account, f.from, f.to]);
+    const rows = await this.db.query("SELECT e.document_id,d.number AS document_number,COALESCE(d.number,e.number) AS doc_number,COALESCE(d.tax_treatment,e.snapshot->'company'->>'profile') AS tax_treatment,e.id,e.number,e.description,e.entry_date::text,e.kind,p.name AS party_name,l.debit::text,l.credit::text FROM journal_lines l JOIN journal_entries e ON e.id=l.entry_id LEFT JOIN parties p ON p.id=e.party_id LEFT JOIN documents d ON d.id=e.document_id WHERE l.account_code=$1 AND e.entry_date BETWEEN $2::date AND $3::date" + (f.partyId ? " AND e.party_id=$4" : "") + " ORDER BY e.entry_date,e.created_at", f.partyId ? [f.account, f.from, f.to, f.partyId] : [f.account, f.from, f.to]);
     return { account, opening: opening?.balance || "0", rows: rows.rows };
   }
   @Post("parties")
@@ -1076,6 +1077,76 @@ export class ApiController {
       return { id: pid };
     });
   }
+  // ---- Permanent delete (admins only), meant for clearing test data. Unlike Reverse/Cancel this leaves no trace in the
+  // books: the entry, its reversal, its ledger lines, allocations and attachments are removed. The audit log records it.
+  @Delete("vouchers/:id")
+  async purgeEntry(
+    @Req()
+  req: any,
+    @Param("id")
+  eid: string) {
+    admin(actor(req));
+    return this.db.tx(async q => {
+      const e = await one(q, "SELECT id,number,document_id FROM journal_entries WHERE id=$1", [eid]);
+      need(e, "Entry not found.", 404);
+      const ids = await entryFamily(q, [eid]);
+      const doc = await one(q, "SELECT d.number FROM journal_entries e JOIN documents d ON d.id=e.document_id WHERE e.id=ANY($1) LIMIT 1", [ids]);
+      need(!doc, "This entry was posted by " + (doc?.number || "a document") + ". Delete that document (Documents or Purchases & bills) instead.", 409);
+      const numbers = await purgeEntries(q, ids);
+      await audit(q, actor(req), "entry.delete", eid, { numbers });
+      return { ok: true, numbers };
+    });
+  }
+  @Delete("documents/:id")
+  async purgeDocument(
+    @Req()
+  req: any,
+    @Param("id")
+  did: string) {
+    admin(actor(req));
+    return this.db.tx(async q => {
+      const d = await one(q, "SELECT id,number,kind FROM documents WHERE id=$1 FOR UPDATE", [did]);
+      need(d, "Document not found.", 404);
+      const notes = (await q.query("SELECT number FROM documents WHERE source_id=$1 AND kind IN ('CREDIT_NOTE','DEBIT_NOTE','SALES_DEBIT_NOTE')", [did])).rows;
+      need(!notes.length, d.number + " has " + notes.map((n: any) => n.number).join(", ") + " against it. Delete " + (notes.length === 1 ? "that note" : "those notes") + " first.", 409);
+      const posted = (await q.query("SELECT id FROM journal_entries WHERE document_id=$1", [did])).rows.map((r: any) => r.id);
+      const numbers = posted.length ? await purgeEntries(q, await entryFamily(q, posted)) : [];
+      await q.query("ALTER TABLE allocations DISABLE TRIGGER USER");
+      // Receipts/payments that settled this document stay, as unapplied advances.
+      await q.query("DELETE FROM allocations WHERE document_id=$1", [did]);
+      await q.query("ALTER TABLE allocations ENABLE TRIGGER USER");
+      await q.query("UPDATE documents SET source_id=NULL WHERE source_id=$1", [did]);
+      await q.query("DELETE FROM attachments WHERE entity_type='DOCUMENT' AND entity_id=$1", [did]);
+      await q.query("DELETE FROM documents WHERE id=$1", [did]);
+      await audit(q, actor(req), "document.delete", did, { number: d.number, kind: d.kind, entries: numbers });
+      return { ok: true };
+    });
+  }
+  // Hard delete is only for contacts nothing points at (typos, duplicates). Anything with history must be archived instead.
+  @Delete("parties/:id")
+  async removeParty(
+    @Req()
+  req: any,
+    @Param("id")
+  pid: string) {
+    writer(actor(req));
+    return this.db.tx(async q => {
+      const p = await one(q, "SELECT id,name FROM parties WHERE id=$1 FOR UPDATE", [pid]);
+      need(p, "Contact not found.", 404);
+      const used = await one(q,
+        "SELECT (SELECT count(*) FROM documents WHERE party_id=$1)::int AS documents,(SELECT count(*) FROM journal_entries WHERE party_id=$1)::int AS entries,(SELECT count(*) FROM projects WHERE party_id=$1)::int AS projects",
+        [pid]);
+      const parts = [
+        used.documents && used.documents + (used.documents === 1 ? " document" : " documents"),
+        used.entries && used.entries + (used.entries === 1 ? " voucher" : " vouchers"),
+        used.projects && used.projects + (used.projects === 1 ? " project" : " projects")
+      ].filter(Boolean);
+      need(!parts.length, "“" + p.name + "” has " + parts.join(", ") + ", so it can't be deleted. Archive it instead to hide it from lists.", 409);
+      await q.query("DELETE FROM parties WHERE id=$1", [pid]);
+      await audit(q, actor(req), "party.delete", pid, { name: p.name });
+      return { ok: true };
+    });
+  }
   @Patch("projects/:id")
   async editProject(
     @Req()
@@ -1310,6 +1381,32 @@ export class ApiController {
       return { ok: true };
     });
   }
+}
+// An entry plus anything it reverses or is reversed by, so a delete never leaves half a reversal pair behind.
+async function entryFamily(q: any, start: string[]): Promise<string[]> {
+  let ids = [...new Set(start)];
+  for (;;) {
+    const r = await q.query(
+      "SELECT id FROM journal_entries WHERE reversal_of=ANY($1) UNION SELECT reversal_of FROM journal_entries WHERE id=ANY($1) AND reversal_of IS NOT NULL",
+      [ids]
+    );
+    const next = [...new Set([...ids, ...r.rows.map((x: any) => x.id)])];
+    if (next.length === ids.length) return ids;
+    ids = next;
+  }
+}
+// Removes posted entries for good. The immutability triggers are switched off for this transaction only (same as clear-transaction-data.sql).
+async function purgeEntries(q: any, ids: string[]): Promise<string[]> {
+  const numbers = (await q.query("SELECT number FROM journal_entries WHERE id=ANY($1) ORDER BY number", [ids])).rows.map((x: any) => x.number);
+  for (const t of ["journal_entries", "journal_lines", "allocations"]) await q.query("ALTER TABLE " + t + " DISABLE TRIGGER USER");
+  await q.query("UPDATE bank_statement_lines SET matched_entry_id=NULL WHERE matched_entry_id=ANY($1)", [ids]);
+  await q.query("DELETE FROM recurring_occurrences WHERE entry_id=ANY($1)", [ids]);
+  await q.query("DELETE FROM allocations WHERE entry_id=ANY($1)", [ids]);
+  await q.query("DELETE FROM attachments WHERE entity_type='ENTRY' AND entity_id=ANY($1)", [ids]);
+  await q.query("DELETE FROM journal_lines WHERE entry_id=ANY($1)", [ids]);
+  await q.query("DELETE FROM journal_entries WHERE id=ANY($1)", [ids]);
+  for (const t of ["journal_entries", "journal_lines", "allocations"]) await q.query("ALTER TABLE " + t + " ENABLE TRIGGER USER");
+  return numbers;
 }
 const GSTIN_FORMAT = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const itemSchema = z.object({

@@ -341,8 +341,8 @@ export function WorkspaceEntryModal({ context }: {
                   <option value="">No project</option>
                   {data.projects.map((p: Row) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
-              </Field><Field label="Description" wide>
-                <input name="description" required placeholder="What was this entry for?"/>
+              </Field><Field label="Description (optional)" wide>
+                <input name="description" placeholder="What was this entry for?"/>
               </Field><Field label="Bill / receipt (optional)" wide>
                 <input name="attachment" type="file" accept={ATTACHMENT_ACCEPT}/>
               </Field><div className="form-note wide">For an existing invoice or vendor bill, use Record receipt / Pay vendor to settle its balance. Direct income entries should not repeat invoiced revenue.</div></>}</>}
@@ -841,6 +841,9 @@ export function WorkspaceEntryModal({ context }: {
                     <option value="INTRA">CGST + SGST</option>
                     <option value="INTER">IGST</option>
                   </select>
+                </Field><Field label="GST rate (%)">
+                  <input type="number" step=".01" min="0" max="100" required value={docLines[0]?.taxRate ?? "18"}
+                    onChange={e => setDocLines(docLines.map(x => ({ ...x, taxRate: e.target.value })))}/>
                 </Field><label className="check-field wide"><input type="checkbox" name="itcEligible" defaultChecked={modal.document ? modal.document.itc_eligible !== false : true}/> Claim input tax credit (ITC) on this bill — untick for blocked credits such as food, personal use or motor vehicles</label></>
                 : <input type="hidden" name="placeOfSupply" value={data.company.state_code || "00"}/>}
               <div className="wide line-items">
@@ -848,24 +851,20 @@ export function WorkspaceEntryModal({ context }: {
                   <span>03</span>
                   <div><strong>Bill items</strong><small>As listed on the supplier's bill</small></div>
                 </div>
-                <div className="line-labels" style={{ gridTemplateColumns: taxTreatment === "TAXABLE" ? "30px minmax(130px,3fr) .6fr .9fr .9fr .6fr 25px" : "30px minmax(130px,3fr) .6fr .9fr .9fr 25px" }}>
-                  <span>SL</span><span>Description / HSN-SAC</span><span>Qty</span><span>Rate (₹)</span><span>Amount (₹)</span>{taxTreatment === "TAXABLE" && <span>GST %</span>}<span />
+                <div className="line-labels" style={{ gridTemplateColumns: "30px minmax(160px,3fr) minmax(110px,1fr) 25px" }}>
+                  <span>SL</span><span>Description</span><span>Amount (₹)</span><span />
                 </div>
-                {docLines.map((l, i) => <div className="line-editor" key={i} style={{ gridTemplateColumns: taxTreatment === "TAXABLE" ? "30px minmax(130px,3fr) .6fr .9fr .9fr .6fr 25px" : "30px minmax(130px,3fr) .6fr .9fr .9fr 25px" }}>
+                {docLines.map((l, i) => <div className="line-editor" key={i} style={{ gridTemplateColumns: "30px minmax(160px,3fr) minmax(110px,1fr) 25px", alignItems: "center" }}>
                   <span className="line-serial">{i + 1}</span>
-                  <div>
-                    <input aria-label={"Line " + (i + 1) + " description"} required list="item-options" placeholder="Item or service" value={l.description}
-                      onChange={e => setDocLines(docLines.map((x, j) => j === i ? withItem(x, e.target.value) : x))}/>
-                    <input aria-label={"Line " + (i + 1) + " HSN SAC"} placeholder="HSN / SAC" value={l.hsn} onChange={e => setDocLines(docLines.map((x, j) => j === i ? { ...x, hsn: e.target.value } : x))}/>
-                  </div>
-                  {["quantity", "price"].map(k => <input key={k} aria-label={"Line " + (i + 1) + " " + k} type="number" step={k === "quantity" ? ".0001" : ".01"} min={k === "quantity" ? ".0001" : "0"} required value={l[k]}
-                    onChange={e => setDocLines(docLines.map((x, j) => j === i ? { ...x, [k]: e.target.value } : x))}/>)}
-                  <span className="line-amount">{money(Math.round((Number(l.quantity) || 0) * (Number(l.price) || 0) * 100) / 100)}</span>
-                  {taxTreatment === "TAXABLE" && <input aria-label={"Line " + (i + 1) + " taxRate"} type="number" step=".01" min="0" max="100" required value={l.taxRate}
-                    onChange={e => setDocLines(docLines.map((x, j) => j === i ? { ...x, taxRate: e.target.value } : x))}/>}
+                  <input aria-label={"Line " + (i + 1) + " description"} required placeholder="Item or service" value={l.description}
+                    onChange={e => setDocLines(docLines.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}/>
+                  {/* One amount per line: stored as quantity 1 × amount so totals and posting stay unchanged. */}
+                  <input aria-label={"Line " + (i + 1) + " amount"} type="number" step=".01" min="0" required placeholder="0.00"
+                    value={Number(l.quantity) === 1 ? l.price : String(Math.round((Number(l.quantity) || 0) * (Number(l.price) || 0) * 100) / 100)}
+                    onChange={e => setDocLines(docLines.map((x, j) => j === i ? { ...x, quantity: "1", price: e.target.value } : x))}/>
                   <button type="button" className="icon-btn" aria-label="Remove line" disabled={docLines.length === 1} onClick={() => setDocLines(docLines.filter((_, j) => j !== i))}><Trash2 size={15}/></button>
                 </div>)}
-                <button className="link" type="button" onClick={() => setDocLines([...docLines, { description: "", quantity: "1", price: "", taxRate: "18", hsn: "" }])}><Plus size={15}/>Add line item</button>
+                <button className="link" type="button" onClick={() => setDocLines([...docLines, { description: "", quantity: "1", price: "", taxRate: docLines[0]?.taxRate || "18", hsn: "" }])}><Plus size={15}/>Add line item</button>
               </div>
               <div className="wide document-form-totals">
                 <div><span>Taxable value</span><strong>{money(draftInvoiceTotals.subtotal)}</strong></div>

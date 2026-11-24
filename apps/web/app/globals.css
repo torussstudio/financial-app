@@ -588,3 +588,24 @@ button.ov-li:hover{background:#f8fbf9}button.ov-li:focus-visible{outline:2px sol
 @media(max-width:1100px){.docs-flow-row{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px}.docs-flow-arrow{display:none}}
 @media(max-width:680px){.docs-flow-row{grid-template-columns:1fr}.docs-headbar .ov-seg{overflow-x:auto;max-width:100%}}
 @media(min-width:1101px){.docs-headbar .ov-bar{flex-wrap:nowrap}.docs-headbar .docs-filters{flex:1 1 auto;min-width:0;flex-wrap:nowrap;justify-content:flex-end;margin-left:0}.docs-headbar .docs-search{flex:0 1 230px;width:auto;min-width:140px}.docs-headbar .docs-control.select select{max-width:170px}}
+
+.danger-link{color:#b4573c!important}.danger-link:hover{color:#8f3f28!important}
+
+/* ---- Loading & transitions ---- */
+.top-progress{position:fixed;top:0;left:230px;right:0;height:2px;z-index:50;overflow:hidden;opacity:0;transition:opacity .2s ease .15s;pointer-events:none}
+.top-progress.on{opacity:1}
+.top-progress i{position:absolute;inset:0 auto 0 0;width:40%;background:linear-gradient(90deg,transparent,var(--green),transparent);animation:progress-slide 1.1s cubic-bezier(.4,0,.2,1) infinite}
+@keyframes progress-slide{from{transform:translateX(-100%)}to{transform:translateX(260%)}}
+main{transition:opacity .25s ease}
+main.is-loading .panel,main.is-loading .kpi,main.is-loading .kpi-grid{opacity:.62;transition:opacity .25s ease .2s}
+main .panel,main .kpi{transition:opacity .25s ease}
+.loader-mark{position:relative;display:grid;place-items:center}
+.loader-mark .logo-mark{animation:loader-breathe 1.6s ease-in-out infinite}
+@keyframes loader-breathe{50%{transform:scale(.94)}}
+.loader-track{width:140px;height:3px;border-radius:3px;background:#e3ebe5;overflow:hidden;position:relative}
+.loader-track i{position:absolute;inset:0 auto 0 0;width:45%;border-radius:3px;background:var(--green);animation:progress-slide 1.2s cubic-bezier(.4,0,.2,1) infinite}
+.skel-rows{display:grid;gap:12px;padding:8px 21px 22px}
+.skel-rows i{display:block;height:14px;border-radius:5px;background:linear-gradient(90deg,#eef2ef 25%,#f7f9f7 50%,#eef2ef 75%);background-size:200% 100%;animation:sk 1.3s linear infinite}
+.skel-rows i:nth-child(3n+2){width:86%}.skel-rows i:nth-child(3n){width:64%}
+@media(max-width:680px){.top-progress{left:0}}
+@media(prefers-reduced-motion:reduce){.top-progress i,.loader-track i{animation:none;width:100%;opacity:.5}.loader-mark .logo-mark{animation:none}}

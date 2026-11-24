@@ -148,6 +148,7 @@ export function DocumentsPage({ ctx }: Props) {
     if (canWrite && d.kind === "INVOICE" && d.status === "ISSUED" && (!d.currency || d.currency === "INR")) list.push(<button key="dn" className="docs-act" onClick={() => open("salesDebitNote", { document: d })}>Debit note</button>);
     if (data.company.einvoice_enabled && einvoiceable(d)) list.push(<ActionButton key="einv" className="docs-act" loadingText="Preparing…" onClick={() => ctx.downloadEinvoice(d)}>E-invoice JSON</ActionButton>);
     if (canWrite && data.company.einvoice_enabled && einvoiceable(d) && !d.irn) list.push(<button key="irn" className="docs-act" onClick={() => open("irn", { document: d })}>Record IRN</button>);
+    if (ctx.isAdmin) list.push(<button key="delete" className="docs-act danger-link" onClick={() => ctx.removeDocument(d)}>Delete</button>);
     return list;
   }
   const cancellable = (d: Row) => canWrite && (d.status === "DRAFT" || (d.status === "ISSUED" && (["QUOTATION", "PROFORMA", "BILL"].includes(d.kind) || (d.kind === "SALES_DEBIT_NOTE" && Number(d.paid) === 0))));

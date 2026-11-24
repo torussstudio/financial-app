@@ -188,10 +188,21 @@ export default function Page() {
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
   const { toasts, notify, dismiss } = useToasts();
-  const [from, setFrom] = useState(monthStart(-5)),
-    [to, setTo] = useState(today()),
-    [partyFilter, setPartyFilter] = useState(""),
-    [accountFilter, setAccountFilter] = useState(""),
+  // Each section keeps its own date range and client/vendor filter, so filtering one never changes another.
+  // Setters act on pageRef (updated synchronously by go()), so `go("x"); setPartyFilter(id)` targets the new section.
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const [defaultFilters] = useState(() => ({ from: monthStart(-5), to: today(), party: "" }));
+  const [filtersByPage, setFiltersByPage] = useState<Record<string, { from: string; to: string; party: string }>>({});
+  const { from, to, party: partyFilter } = filtersByPage[page] || defaultFilters;
+  const patchFilters = useCallback((patch: Partial<{ from: string; to: string; party: string }>) => {
+    const key = pageRef.current;
+    setFiltersByPage(all => ({ ...all, [key]: { ...(all[key] || defaultFilters), ...patch } }));
+  }, [defaultFilters]);
+  const setFrom = useCallback((v: string) => patchFilters({ from: v }), [patchFilters]),
+    setTo = useCallback((v: string) => patchFilters({ to: v }), [patchFilters]),
+    setPartyFilter = useCallback((v: string) => patchFilters({ party: v }), [patchFilters]);
+  const [accountFilter, setAccountFilter] = useState(""),
     [search, setSearch] = useState(""),
     [taxTab, setTaxTab] = useState("ALL"),
     [docKind, setDocKind] = useState("ALL"),
@@ -242,6 +253,14 @@ export default function Page() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  // Section change: a short fade-and-rise on the content, done with the Web Animations API so pages are not remounted.
+  const mainRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const el = mainRef.current;
+    if (!el || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    el.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }], { duration: 280, easing: "cubic-bezier(.2,.8,.2,1)" });
+    window.scrollTo({ top: 0 });
+  }, [page]);
   const pendingRequests = useRef(new Map<string, string>());
   const loadSequence = useRef(0);
 
@@ -361,6 +380,7 @@ export default function Page() {
   closeRef.current = requestClose;
 
   function go(p: string) {
+    pageRef.current = p;
     setPage(p);
     sessionStorage.setItem("company-accounts-active-page", p);
     setSearch("");
@@ -790,6 +810,17 @@ export default function Page() {
   }
 
   const canWrite = session?.user.role !== "VIEWER";
+  const isAdmin = session?.user.role === "ADMIN";
+  // Permanent delete (admins): removes the record and its ledger lines for good. Meant for test data; Reverse/Cancel keep history.
+  const removeDocument = (d: Row) => {
+    if (!window.confirm("Delete " + (d.number || "this document") + " permanently? Its ledger entries are removed too. Payments that settled it stay as advances. This can't be undone.")) return;
+    return perform("documents/" + d.id, undefined, "DELETE", { tone: "success", title: "Deleted", description: d.number }, "Couldn't delete " + (d.number || "the document")).catch(() => {});
+  };
+  const removeEntry = (e: Row) => {
+    if (e.document_id) return removeDocument({ id: e.document_id, number: e.document_number || e.number });
+    if (!window.confirm("Delete " + e.number + " permanently? The entry, any reversal of it and its attachments are removed from every report. This can't be undone.")) return;
+    return perform("vouchers/" + e.id, undefined, "DELETE", { tone: "success", title: "Entry deleted", description: e.number }, "Couldn't delete " + e.number).catch(() => {});
+  };
   // Search what people can see: plain field values and document line text. Ids, audit columns and
   // nested snapshots (which hold logos as base64) would otherwise produce false matches.
   const hiddenSearchKeys = ["id", "created_by", "created_at", "posting_tx", "reversal_of", "reversed_by"];
@@ -887,9 +918,9 @@ export default function Page() {
     finally { setBusy(false) }
   };
 
-  if (!authReady) return <div className="loading-page"><div className="logo-mark">l<span>.</span></div><p>Opening your workspace…</p></div>;
+  if (!authReady) return <div className="loading-page" role="status"><div className="loader-mark"><div className="logo-mark">l<span>.</span></div></div><div className="loader-track" aria-hidden="true"><i/></div><p>Opening your workspace…</p></div>;
   if (!session) return <LoginScreen error={error} busy={busy} demoLogin={demoLogin} onLogin={submitLogin} onDemo={openDemo} />;
-  if (!data) return <div className="loading-page"><div className="logo-mark">l<span>.</span></div>{!error && <div className="skeleton-stack" aria-hidden="true"><i/><i/><i/></div>}<p>{error || "Preparing your accounts…"}</p>{error && <ActionButton className="btn" loading={loading} loadingText="Retrying…" onClick={refresh}>Retry</ActionButton>}</div>;
+  if (!data) return <div className="loading-page" role="status"><div className="loader-mark"><div className="logo-mark">l<span>.</span></div></div>{!error && <div className="loader-track" aria-hidden="true"><i/></div>}<p>{error || "Preparing your accounts…"}</p>{error && <ActionButton className="btn" loading={loading} loadingText="Retrying…" onClick={refresh}>Retry</ActionButton>}</div>;
 
   const metric = data.metrics,
     active = navigation.find(n => n[0] === page),
@@ -962,7 +993,7 @@ export default function Page() {
     loading, busy, setError, notify, fail, report, setReport, Field, users, setUsers, api, session, setModal, EntryTable, Report,
     Badge, today, exportCSV, exportRows, txs, filter, active, partySelect, bankSelect, catSelect,
     setPartyFilter, billsDue, attach, confirmFiled, downloadEinvoice, downloadFile, withWarnings,
-    docsAnyTab, inTaxTab, datePresets, setFrom, setTo, refresh, exportVisible
+    docsAnyTab, inTaxTab, datePresets, setFrom, setTo, refresh, exportVisible, isAdmin, removeEntry, removeDocument
   };
 
   return <div className="app-shell">
@@ -989,7 +1020,8 @@ export default function Page() {
         onToggleTheme={() => setDark(d => !d)}
         onOutstanding={() => { go("documents"); setDocKind("INVOICE") }}
       />
-      <main>
+      <div className={"top-progress" + (loading ? " on" : "")} role="progressbar" aria-label="Loading" aria-hidden={!loading}><i/></div>
+      <main ref={mainRef} className={loading ? "is-loading" : ""} aria-busy={loading}>
         {!["documents", "dashboard"].includes(page) && <div className="page-heading">
           <div>
             <span className="eyebrow">{page === "dashboard" ? "YOUR FINANCES, AT A GLANCE" : "COMPANY ACCOUNTS"}</span>

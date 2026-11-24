@@ -273,13 +273,20 @@ export async function postVoucher(
       : true;
     need(acc?.kind === expectedKind && !acc.is_cash && categoryOk, "Account does not match the voucher category.");
   }
+  let description = String(b.description || "").trim();
+  if (!description) {
+    const side = ["INCOME", "CAPITAL_IN", "LOAN_IN"].includes(b.kind) ? credit : debit;
+    const acc = await one(q, "SELECT name FROM accounts WHERE code=$1", [side]);
+    const party = b.partyId ? await one(q, "SELECT name FROM parties WHERE id=$1", [b.partyId]) : null;
+    description = [(b.kind === "TRANSFER" ? "Transfer to " : "") + (acc?.name || b.kind), party?.name].filter(Boolean).join(" · ");
+  }
   return writeJournal(
     q,
     actor,
     {
     date: b.date,
     kind: b.kind,
-    description: b.description,
+    description,
     partyId: b.partyId,
     projectId: b.projectId,
     lines: [{ account: debit, debit: amount }, { account: credit, credit: amount }]

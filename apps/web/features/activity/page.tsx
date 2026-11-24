@@ -86,7 +86,7 @@ export function LedgerActivityPages({ ctx }: Props) {
                 <td className="nowrap">{e.number}<small>{e.kind === "RECEIPT" ? "Invoice receipt" : e.kind === "BILL" ? "Payment receipt" : "Direct income"}</small></td>
                 <td className="nowrap">{e.cash_account || "—"}</td>
                 <td className="right amount">{money(e.cash_in)}</td>
-                <td className="right">{e.kind === "RECEIPT" && <button className="link small" onClick={() => viewReceipt(e.id)}>View</button>}</td>
+                <td className="right"><div className="row-actions">{e.kind === "RECEIPT" && <button className="link small" onClick={() => viewReceipt(e.id)}>View</button>}{ctx.isAdmin && <button className="link small danger-link" onClick={() => ctx.removeEntry(e)}>Delete</button>}</div></td>
               </tr>)}
               <tr className="total-row"><td colSpan={4}>Total received</td><td className="right amount">{money(receivedTotal)}</td><td /></tr>
             </tbody>
@@ -139,6 +139,7 @@ export function LedgerActivityPages({ ctx }: Props) {
     canWrite={canWrite}
     onReceipt={viewReceipt}
     onReverse={(entry: Row) => open("reverse", { entry })}
+    onDelete={ctx.isAdmin ? ctx.removeEntry : undefined}
     onAttach={(entry: Row) => entry.document_id ? ctx.attach("DOCUMENT", entry.document_id, entry.number) : ctx.attach("ENTRY", entry.id, entry.number)}
     attachmentCounts={data.attachmentCounts}/>
         <div className="panel-note">Latest 250 entries in the selected period. Posted amounts include applicable tax; operating totals above exclude output GST.</div>

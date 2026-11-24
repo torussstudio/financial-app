@@ -5,13 +5,14 @@ import { useTable } from "../lib/use-table";
 import { Pager, SortTh } from "./pager";
 import { day, money, pretty, type Row } from "../lib/format";
 const OUT = ["EXPENSE", "REIMBURSEMENT", "ASSET", "PAYMENT", "CREDIT_NOTE", "PURCHASE"];
-export function EntryTable({ rows, compact = false, canWrite, onReceipt, onReverse, onAttach, attachmentCounts = {} }: {
+export function EntryTable({ rows, compact = false, canWrite, onReceipt, onReverse, onAttach, onDelete, attachmentCounts = {} }: {
   rows: Row[];
   compact?: boolean;
   canWrite: boolean;
   onReceipt: (id: string) => void | Promise<void>;
   onReverse: (entry: Row) => void;
   onAttach?: (entry: Row) => void;
+  onDelete?: (entry: Row) => void;
   attachmentCounts?: Record<string, number>;
 }) {
   const t = useTable(rows, compact ? 1000 : 25);
@@ -56,6 +57,7 @@ export function EntryTable({ rows, compact = false, canWrite, onReceipt, onRever
                 <Printer size={15}/>
               </ActionButton>}
               {canWrite && !e.document_id && !e.reversal_of && !e.reversed_by && <button className="link small" onClick={() => onReverse(e)}>Reverse</button>}
+              {onDelete && <button className="link small danger-link" onClick={() => onDelete(e)}>Delete</button>}
             </div>
           </td>}
         </tr>)}

@@ -5,7 +5,7 @@ type Props = {
   ctx: any
 };
 export function PartiesPage({ ctx }: Props) {
-  const { page, data, money, pretty, go, setPartyFilter, Empty, search, setSearch, Badge, canWrite, open } = ctx;
+  const { page, data, money, pretty, go, setPartyFilter, Empty, search, setSearch, Badge, canWrite, open, perform } = ctx;
   const filter: (rows: Row[]) => Row[] = ctx.filter;
   const [showArchived, setShowArchived] = useState(false);
   if (page !== "parties") return null;
@@ -55,9 +55,14 @@ export function PartiesPage({ ctx }: Props) {
                   {canWrite && <button className="link small" onClick={() => open("party", { party: p })}>Edit</button>}
                   {canWrite && received > 0 && <button className="link small" onClick={() => open("advance", { direction: "RECEIPT", partyId: p.id })}>Apply advance</button>}
                   {canWrite && paid > 0 && <button className="link small" onClick={() => open("advance", { direction: "PAYMENT", partyId: p.id })}>Apply advance</button>}
+                  {canWrite && <button className="link small" style={{ color: "#b4573c" }} onClick={() => {
+                    if (!window.confirm("Delete “" + p.name + "” permanently? This can't be undone. Contacts with bills, invoices or vouchers can't be deleted — archive them instead.")) return;
+                    perform("parties/" + p.id, undefined, "DELETE", { tone: "success", title: "Contact deleted", description: p.name }, "Couldn't delete contact").catch(() => {});
+                  }}>Delete</button>}
                   <button className="link small" onClick={() => {
+                    // Navigate first: filters belong to the section, so this sets the voucher list's filter.
+                    go("vouchers");
                     setPartyFilter(p.id);
-                    go("vouchers")
                   }}>Activity <ArrowUpRight size={13}/>
                   </button>
                 </div>
